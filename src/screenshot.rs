@@ -149,6 +149,10 @@ impl Capturer {
         self.wayland_helper.active_toplevel_index(output)
     }
 
+    fn toplevel_rects(&self, output: &WlOutput) -> Vec<Option<Rect>> {
+        self.wayland_helper.output_toplevel_rects(output)
+    }
+
     async fn interactive_toplevel_images(
         &self,
         outputs: &[Output],
@@ -431,6 +435,10 @@ pub struct Args {
     pub preview: Option<HashMap<String, ScreenshotImage>>,
     /// Frames of the windows on each output, in stacking order.
     pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
+    /// Where each of those windows sits on the desktop, in the same order. `None` for a
+    /// window the compositor gave no geometry for; marks are simply not baked into that
+    /// one rather than landing somewhere arbitrary.
+    pub toplevel_rects: HashMap<String, Vec<Option<Rect>>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
     /// Whether the overlay is put up at all. `full`, `screen` and `window` shoot straight
@@ -664,14 +672,26 @@ fn save(
                 success = false;
             }
         }
-        // Marks are not baked into a window shot: the frame is the window's own surface,
-        // and the objects are in desktop coordinates with no rectangle to map them by.
         Choice::Window(output, Some(window_i)) => {
             if let Some(img) = args
                 .toplevel_images
                 .get(&output)
                 .and_then(|imgs| imgs.get(window_i))
             {
+                // The window's own place on the desktop is what maps a mark onto its
+                // frame. Without it the marks are left off rather than guessed at.
+                let mut rgba = img.rgba.clone();
+                if let Some(Some(rect)) = args
+                    .toplevel_rects
+                    .get(&output)
+                    .and_then(|rects| rects.get(window_i))
+                {
+                    crate::editor::bake(&mut rgba, objects, *rect);
+                }
+                let img = ScreenshotImage {
+                    handle: img.handle.clone(),
+                    rgba,
+                };
                 if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
                     .inspect_err(|err| {
                         tracing::error!("Failed to capture screenshot: {:?}", err);
@@ -1124,8 +1144,14 @@ pub async fn capture(
         },
     };
 
+    let toplevel_rects = outputs
+        .iter()
+        .map(|output| (output.name.clone(), capturer.toplevel_rects(&output.output)))
+        .collect();
+
     Some(Args {
         output_images,
+        toplevel_rects,
         preview: None,
         toplevel_images,
         choice,

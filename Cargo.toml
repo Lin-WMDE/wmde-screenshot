@@ -35,9 +35,6 @@ zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
 wayland-client = "0.31.14"
-# Pulled in by the capture module as it stands. The dmabuf and cursor-stream halves of it
-# belong to screencast, not to a screenshot, and come out in a later pass.
-gbm = "0.18.0"
 wayland-protocols = "0.32.12"
 # Runtime-agnostic timer for the capture timeouts: the same code has to work under tokio
 # and under a plain block_on.
