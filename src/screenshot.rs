@@ -368,6 +368,7 @@ pub enum Msg {
     Draw(crate::widget::annotations::Draw),
     /// Pick a tool, or `None` to go back to moving the selection.
     Tool(Option<crate::editor::Tool>),
+    Color(cosmic::iced::Color),
     Undo,
     Redo,
     Capture,
@@ -477,6 +478,7 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
                 .height(Length::Fill),
             )
             .map(Msg::Draw),
+            editor_bar(app),
         ),
         |key, modifiers| {
             if modifiers.control() {
@@ -674,11 +676,16 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
                 Draw::Press(at) => app.editor.press(at),
                 Draw::Drag(at) => app.editor.drag(at),
                 Draw::Release => app.editor.release(),
+                Draw::Width(steps) => app.editor.nudge_width(steps),
             }
             cosmic::Task::none()
         }
         Msg::Tool(tool) => {
             app.editor.tool = tool;
+            cosmic::Task::none()
+        }
+        Msg::Color(color) => {
+            app.editor.color = color;
             cosmic::Task::none()
         }
         Msg::Undo => {
@@ -1059,4 +1066,96 @@ fn announce(success: bool, path: Option<&Path>) {
             tracing::warn!("cannot show the notification: {err}");
         }
     });
+}
+
+/// The drawing half of the toolbar: what to draw with, in what colour, how thick, and the
+/// two arrows that take it back. Built here rather than inside the widget because this is
+/// where the tool, the colour and the width live.
+fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
+    use crate::editor::Tool;
+    use cosmic::iced::{Alignment, Background, Border};
+    use cosmic::widget::{button, container, divider, icon, row, space, text};
+
+    let theme = app.core.system_theme().cosmic();
+    let spacing = theme.spacing;
+
+    let tool_button = |tool: Tool, name: &'static str| {
+        let chosen = app.editor.tool == Some(tool);
+        button::custom(
+            icon::Icon::from(icon::from_name(name).size(48))
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(28.0)),
+        )
+        .selected(chosen)
+        .class(cosmic::theme::Button::Icon)
+        .padding(spacing.space_xxs)
+        // Pressing the tool that is already in hand puts it down, which is how a person
+        // gets back to moving the selection without reaching for Escape.
+        .on_press(Msg::Tool((!chosen).then_some(tool)))
+    };
+
+    let swatch = |color: cosmic::iced::Color| {
+        let chosen = color == app.editor.color;
+        button::custom(
+            container(space::horizontal().width(Length::Fixed(16.0)))
+                .height(Length::Fixed(16.0))
+                .class(cosmic::theme::Container::custom(move |_| {
+                    cosmic::iced::widget::container::Style {
+                        background: Some(Background::Color(color)),
+                        border: Border {
+                            radius: 8.0.into(),
+                            // The chosen colour is the one with a ring, because a swatch
+                            // cannot show selection by changing colour.
+                            width: if chosen { 2.0 } else { 0.0 },
+                            color: cosmic::iced::Color::WHITE,
+                        },
+                        ..Default::default()
+                    }
+                })),
+        )
+        .class(cosmic::theme::Button::Icon)
+        .padding(spacing.space_xxxs)
+        .on_press(Msg::Color(color))
+    };
+
+    let arrow = |name: &'static str, message: Msg| {
+        button::custom(
+            icon::Icon::from(icon::from_name(name).size(48))
+                .width(Length::Fixed(24.0))
+                .height(Length::Fixed(24.0)),
+        )
+        .class(cosmic::theme::Button::Icon)
+        .padding(spacing.space_xxs)
+        .on_press(message)
+    };
+
+    let accent = cosmic::iced::Color::from(theme.accent_color());
+
+    let mut bar = row::with_capacity(20)
+        .align_y(Alignment::Center)
+        .spacing(spacing.space_xxs);
+
+    for (tool, name) in [
+        (Tool::Pencil, "tool-pencil-symbolic"),
+        (Tool::Line, "draw-line"),
+        (Tool::Arrow, "draw-arrow"),
+        (Tool::Rectangle, "draw-rectangle-symbolic"),
+        (Tool::Marker, "marker-symbolic"),
+    ] {
+        bar = bar.push(tool_button(tool, name));
+    }
+
+    bar = bar.push(divider::vertical::light().height(Length::Fixed(28.0)));
+
+    for color in crate::editor::palette(accent) {
+        bar = bar.push(swatch(color));
+    }
+
+    bar.push(divider::vertical::light().height(Length::Fixed(28.0)))
+        // The wheel changes it; the number says what it changed to.
+        .push(text::body(format!("{:.0}", app.editor.width)))
+        .push(divider::vertical::light().height(Length::Fixed(28.0)))
+        .push(arrow("edit-undo-symbolic", Msg::Undo))
+        .push(arrow("edit-redo-symbolic", Msg::Redo))
+        .into()
 }

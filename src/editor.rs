@@ -191,6 +191,19 @@ impl Editor {
         }
     }
 
+    /// Thinner than one pixel is invisible, thicker than this stops being a mark and
+    /// starts being a fill.
+    pub fn set_width(&mut self, width: f32) {
+        self.width = width.clamp(1.0, 30.0);
+    }
+
+    /// One step of the wheel. Coarser as the stroke grows: a pixel matters at 2, and does
+    /// not at 20.
+    pub fn nudge_width(&mut self, steps: f32) {
+        let step = if self.width >= 10.0 { 2.0 } else { 1.0 };
+        self.set_width(self.width + steps * step);
+    }
+
     pub fn undo(&mut self) {
         if let Some(object) = self.objects.pop() {
             self.undone.push(object);
@@ -202,6 +215,22 @@ impl Editor {
             self.objects.push(object);
         }
     }
+}
+
+/// The colours a mark can be. The accent leads because it is the desktop's own colour;
+/// the rest are a spread that stays readable on a dark screenshot and on a light one, which
+/// a single colour cannot do.
+pub fn palette(accent: Color) -> [Color; 8] {
+    [
+        accent,
+        Color::from_rgb(0.90, 0.16, 0.16),
+        Color::from_rgb(0.96, 0.55, 0.10),
+        Color::from_rgb(0.98, 0.85, 0.15),
+        Color::from_rgb(0.30, 0.75, 0.35),
+        Color::from_rgb(0.20, 0.55, 0.90),
+        Color::WHITE,
+        Color::BLACK,
+    ]
 }
 
 /// Where an arrow's head sits, given its line. Returned as the two points that close the

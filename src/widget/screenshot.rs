@@ -29,6 +29,9 @@ pub struct ScreenshotSelection<'a, Msg> {
     pub choice: Choice,
     pub choices: Vec<Choice>,
     pub output_logical_geo: Vec<Rect>,
+    /// Where this output starts on the desktop. The selection is in desktop coordinates
+    /// and the surface is not, so the toolbar cannot be placed without it.
+    pub output_origin: (i32, i32),
     pub choice_labels: Vec<Cow<'a, str>>,
     pub bg_element: Element<'a, Msg>,
     pub fg_element: Element<'a, Msg>,
@@ -79,6 +82,9 @@ where
         spacing: Spacing,
         dnd_id: u128,
         draw_element: Element<'a, Msg>,
+        // The drawing half of the toolbar. Built by the caller, which is where the tool,
+        // the colour and the width live.
+        editor_bar: Element<'a, Msg>,
     ) -> Self {
         let space_l = spacing.space_l;
         let space_s = spacing.space_s;
@@ -214,98 +220,105 @@ where
             id: cosmic::widget::Id::unique(),
             choices: Vec::new(),
             output_logical_geo: Vec::new(),
+            output_origin: output.logical_pos,
             choice_labels: Vec::new(),
             bg_element,
             fg_element,
             draw_element,
             menu_element: cosmic::widget::container(
-                row![
+                cosmic::widget::column::with_children(vec![
+                    editor_bar,
                     row![
-                        button::custom(
-                            icon::Icon::from(
-                                icon::from_name("screenshot-selection-symbolic").size(64)
+                        row![
+                            button::custom(
+                                icon::Icon::from(
+                                    icon::from_name("screenshot-selection-symbolic").size(64)
+                                )
+                                .width(Length::Fixed(40.0))
+                                .height(Length::Fixed(40.0))
+                                .class(
+                                    if matches!(choice, Choice::Rectangle(..)) {
+                                        active_icon.clone()
+                                    } else {
+                                        cosmic::theme::Svg::default()
+                                    }
+                                )
                             )
-                            .width(Length::Fixed(40.0))
-                            .height(Length::Fixed(40.0))
-                            .class(
-                                if matches!(choice, Choice::Rectangle(..)) {
+                            .selected(matches!(choice, Choice::Rectangle(..)))
+                            .class(cosmic::theme::Button::Icon)
+                            .on_press(on_choice_change(Choice::Rectangle(
+                                Rect::default(),
+                                DragState::None
+                            )))
+                            .padding(space_xs),
+                            button::custom(
+                                icon::Icon::from(
+                                    icon::from_name("screenshot-window-symbolic").size(64)
+                                )
+                                .class(if matches!(choice, Choice::Window(..)) {
                                     active_icon.clone()
                                 } else {
                                     cosmic::theme::Svg::default()
-                                }
+                                })
+                                .width(Length::Fixed(40.0))
+                                .height(Length::Fixed(40.0))
                             )
-                        )
-                        .selected(matches!(choice, Choice::Rectangle(..)))
-                        .class(cosmic::theme::Button::Icon)
-                        .on_press(on_choice_change(Choice::Rectangle(
-                            Rect::default(),
-                            DragState::None
-                        )))
-                        .padding(space_xs),
-                        button::custom(
-                            icon::Icon::from(
-                                icon::from_name("screenshot-window-symbolic").size(64)
+                            .selected(matches!(choice, Choice::Window(..)))
+                            .class(cosmic::theme::Button::Icon)
+                            .on_press(on_choice_change(Choice::Window(output.name.clone(), None)))
+                            .padding(space_xs),
+                            button::custom(
+                                icon::Icon::from(
+                                    icon::from_name("screenshot-screen-symbolic").size(64)
+                                )
+                                .width(Length::Fixed(40.0))
+                                .height(Length::Fixed(40.0))
+                                .class(
+                                    if matches!(choice, Choice::Output(..)) {
+                                        active_icon.clone()
+                                    } else {
+                                        cosmic::theme::Svg::default()
+                                    }
+                                )
                             )
-                            .class(if matches!(choice, Choice::Window(..)) {
-                                active_icon.clone()
+                            .selected(matches!(choice, Choice::Output(..)))
+                            .class(cosmic::theme::Button::Icon)
+                            .on_press(on_choice_change(Choice::Output(output.name.clone())))
+                            .padding(space_xs)
+                        ]
+                        .spacing(space_s)
+                        .align_y(Alignment::Center),
+                        divider::vertical::light().height(Length::Fixed(64.0)),
+                        button::custom(text(fl!("capture"))).on_press_maybe(
+                            if let Choice::Rectangle(r, ..) = choice {
+                                // Disable button on empty selection
+                                r.dimensions().is_some().then_some(on_capture)
                             } else {
-                                cosmic::theme::Svg::default()
-                            })
-                            .width(Length::Fixed(40.0))
-                            .height(Length::Fixed(40.0))
-                        )
-                        .selected(matches!(choice, Choice::Window(..)))
-                        .class(cosmic::theme::Button::Icon)
-                        .on_press(on_choice_change(Choice::Window(output.name.clone(), None)))
-                        .padding(space_xs),
+                                Some(on_capture)
+                            }
+                        ),
+                        divider::vertical::light().height(Length::Fixed(64.0)),
+                        Element::from(dropdown(
+                            save_locations.as_slice(),
+                            Some(selected_save_location),
+                            |i| i
+                        ))
+                        .map(dropdown_selected),
+                        divider::vertical::light().height(Length::Fixed(64.0)),
                         button::custom(
-                            icon::Icon::from(
-                                icon::from_name("screenshot-screen-symbolic").size(64)
-                            )
-                            .width(Length::Fixed(40.0))
-                            .height(Length::Fixed(40.0))
-                            .class(
-                                if matches!(choice, Choice::Output(..)) {
-                                    active_icon.clone()
-                                } else {
-                                    cosmic::theme::Svg::default()
-                                }
-                            )
+                            icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
+                                .width(Length::Fixed(40.0))
+                                .height(Length::Fixed(40.0))
                         )
-                        .selected(matches!(choice, Choice::Output(..)))
                         .class(cosmic::theme::Button::Icon)
-                        .on_press(on_choice_change(Choice::Output(output.name.clone())))
-                        .padding(space_xs)
+                        .on_press(on_cancel),
                     ]
+                    .align_y(Alignment::Center)
                     .spacing(space_s)
-                    .align_y(Alignment::Center),
-                    divider::vertical::light().height(Length::Fixed(64.0)),
-                    button::custom(text(fl!("capture"))).on_press_maybe(
-                        if let Choice::Rectangle(r, ..) = choice {
-                            // Disable button on empty selection
-                            r.dimensions().is_some().then_some(on_capture)
-                        } else {
-                            Some(on_capture)
-                        }
-                    ),
-                    divider::vertical::light().height(Length::Fixed(64.0)),
-                    Element::from(dropdown(
-                        save_locations.as_slice(),
-                        Some(selected_save_location),
-                        |i| i
-                    ))
-                    .map(dropdown_selected),
-                    divider::vertical::light().height(Length::Fixed(64.0)),
-                    button::custom(
-                        icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
-                            .width(Length::Fixed(40.0))
-                            .height(Length::Fixed(40.0))
-                    )
-                    .class(cosmic::theme::Button::Icon)
-                    .on_press(on_cancel),
-                ]
-                .align_y(Alignment::Center)
-                .spacing(space_s)
+                    .into(),
+                ])
+                .spacing(space_xxs)
+                .align_x(Alignment::Center)
                 .padding([space_xxs, space_s, space_xxs, space_s]),
             )
             .class(cosmic::theme::Container::Custom(Box::new(|theme| {
@@ -494,10 +507,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 .as_widget_mut()
                 .layout(&mut children[3], renderer, limits);
         let menu_bounds = menu_node.bounds();
-        menu_node = menu_node.move_to(Point {
-            x: (limits.max().width - menu_bounds.width) / 2.0,
-            y: limits.max().height - menu_bounds.height - 32.0,
-        });
+        menu_node = menu_node.move_to(self.menu_position(limits.max(), menu_bounds.size()));
 
         layout::Node::with_children(
             limits.resolve(Length::Fill, Length::Fill, Size::ZERO),
@@ -561,6 +571,51 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 .as_widget()
                 .drag_destinations(state, layout, renderer, dnd_rectangles);
         }
+    }
+}
+
+impl<Msg> ScreenshotSelection<'_, Msg> {
+    /// Where the toolbar sits. Under the selection, above it when there is no room below,
+    /// and along the bottom of the screen when there is no selection to sit by - which is
+    /// what picking a whole monitor or a window means.
+    fn menu_position(&self, surface: Size, menu: Size) -> Point {
+        /// Between the selection edge and the toolbar. Touching would read as one object.
+        const GAP: f32 = 12.0;
+
+        let fallback = Point {
+            x: (surface.width - menu.width) / 2.0,
+            y: surface.height - menu.height - 32.0,
+        };
+
+        let Choice::Rectangle(rect, _) = &self.choice else {
+            return fallback;
+        };
+        if rect.dimensions().is_none() {
+            return fallback;
+        }
+
+        // Desktop coordinates to this surface's own.
+        let left = (rect.left - self.output_origin.0) as f32;
+        let right = (rect.right - self.output_origin.0) as f32;
+        let top = (rect.top - self.output_origin.1) as f32;
+        let bottom = (rect.bottom - self.output_origin.1) as f32;
+
+        let below = bottom + GAP;
+        let above = top - GAP - menu.height;
+        let y = if below + menu.height <= surface.height {
+            below
+        } else if above >= 0.0 {
+            above
+        } else {
+            // A selection tall enough to leave no room outside it: the toolbar goes
+            // inside, along its bottom edge, rather than off the screen.
+            (bottom - menu.height - GAP).max(0.0)
+        };
+
+        let x = ((left + right) / 2.0 - menu.width / 2.0)
+            .clamp(0.0, (surface.width - menu.width).max(0.0));
+
+        Point { x, y }
     }
 }
 

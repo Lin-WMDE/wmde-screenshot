@@ -13,6 +13,8 @@ pub enum Draw {
     Press(Point),
     Drag(Point),
     Release,
+    /// Wheel steps, positive away from the person: thicker.
+    Width(f32),
 }
 
 pub struct Annotations<'a> {
@@ -48,6 +50,16 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
             }
             cosmic::iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 Some(canvas::Action::publish(Draw::Release).and_capture())
+            }
+            // The wheel belongs to the tool while one is in hand: there is nothing to
+            // scroll on a screenshot.
+            cosmic::iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let steps = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    // A touchpad reports pixels; a stroke should not jump by forty.
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 40.0,
+                };
+                Some(canvas::Action::publish(Draw::Width(steps)).and_capture())
             }
             _ => None,
         }
