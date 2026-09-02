@@ -13,13 +13,15 @@ use cosmic::widget::{self, Widget};
 
 use crate::screenshot::Rect;
 
-/// How much black lies over everything outside the selection.
+/// Alpha of the black laid over everything outside the selection.
 ///
-/// Chosen, not derived. `ref/flameshot.jpg` measures between 0.36 and 0.54 - it is a
-/// photograph of a screen, so it gives a range: the clean margins outside the selection sit
-/// at 0.46 of the brightness inside it, the bands either side of the top edge at 0.64. This
-/// sits just under that range, which leaves the desktop readable through the dim.
-const DIM: f32 = 0.33;
+/// This is the alpha, NOT the brightness that survives it: everything outside keeps
+/// `1.0 - DIM` of what it had. At 0.75 that is a quarter, which is the figure to reason in
+/// when someone asks for "a quarter" - the two read the same aloud and mean the opposite.
+///
+/// `ref/flameshot.jpg` measures between 0.36 and 0.54 of alpha; this is deliberately darker
+/// than the reference.
+const DIM: f32 = 0.75;
 
 pub const MIME: &str = "X-WMDE-SCREENSHOT-MyData";
 pub struct MyData;
