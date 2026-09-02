@@ -43,21 +43,13 @@ impl Config {
     }
 }
 
-/// Logical coordinates of a rectangle selection
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
-pub struct Rect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
+/// Unknown keys are ignored on purpose. A key dropped from this struct still sits in the
+/// file on every machine that ran an older build, and with `deny_unknown_fields` that one
+/// leftover would fail the whole struct - taking the save location and the filename pattern
+/// down with it and resetting them to defaults without a word.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct Screenshot {
     pub save_location: ImageSaveLocation,
-    #[serde(default)]
-    pub last_rectangle: Option<Rect>,
     /// Name of the saved file, as a `strftime` pattern in local time. Anything `strftime`
     /// takes works; the extension is part of the pattern, so changing it to `.jpg` would
     /// only rename a PNG.
@@ -73,7 +65,6 @@ impl Default for Screenshot {
     fn default() -> Self {
         Self {
             save_location: ImageSaveLocation::default(),
-            last_rectangle: None,
             filename: default_filename(),
         }
     }

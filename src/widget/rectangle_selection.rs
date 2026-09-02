@@ -486,10 +486,8 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         );
         let outer_top_left = Point::new(self.output_rect.left as f32, self.output_rect.top as f32);
         let outer_rect = Rectangle::new(outer_top_left, outer_size);
-        // A monitor the selection does not reach at all is dimmed whole. Returning here -
-        // which is what used to happen - left that monitor at full brightness, so a
-        // selection on one screen made the other look like it was not part of the shot.
-        let Some(clipped_inner_rect) = inner_rect.intersection(&outer_rect) else {
+
+        let dim_whole = |renderer: &mut cosmic::Renderer| {
             let mut overlay = Color::BLACK;
             overlay.a = 0.3;
             renderer.fill_quad(
@@ -501,6 +499,22 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 },
                 overlay,
             );
+        };
+
+        // Nothing selected yet: every monitor is dimmed and no frame is drawn. This is what
+        // the overlay opens on, and it is the whole of what the person sees until the first
+        // drag - a border around a rectangle of no size would be a two-pixel mark nobody
+        // could interpret, and the eight handles around it worse.
+        if self.rectangle_selection.dimensions().is_none() {
+            dim_whole(renderer);
+            return;
+        }
+
+        // A monitor the selection does not reach at all is dimmed whole. Returning here -
+        // which is what used to happen - left that monitor at full brightness, so a
+        // selection on one screen made the other look like it was not part of the shot.
+        let Some(clipped_inner_rect) = inner_rect.intersection(&outer_rect) else {
+            dim_whole(renderer);
             return;
         };
         // Everything outside the selection is dimmed. Four bands rather than one mesh:
