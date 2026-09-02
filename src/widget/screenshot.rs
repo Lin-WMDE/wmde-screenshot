@@ -374,6 +374,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
+            &mut self.draw_element,
             &mut self.menu_element,
         ]
         .into_iter()
