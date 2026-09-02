@@ -1,0 +1,67 @@
+[package]
+name = "wmde-screenshot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "GPL-3.0-only"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+futures = "0.3"
+log-panics = { version = "2.1.0", features = ["with-backtrace"] }
+tokio = { version = "1.52.1", features = ["macros", "rt", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+
+# The window-less daemon shape, layer surfaces and the theme all come from here. Feature
+# set follows wmde-portal: the same runtime, the same renderer selection.
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = [
+    "autosize",
+    "dbus-config",
+    "desktop",
+    "multi-window",
+    "tokio",
+    "wayland",
+    "wgpu",
+    "winit",
+]
+
+# Build libcosmic and iced from the local WMDE fork, so the rebranded config root and the
+# fun.wmde.* theme ids resolve. ONE table per canonical git source: cargo folds the
+# `.../libcosmic`, `.../libcosmic/` and `.../libcosmic.git` spellings into a single source,
+# and a second table for it does not add to this one - part of the graph would silently
+# resolve to upstream with no warning and no error.
+[patch."https://github.com/pop-os/libcosmic"]
+libcosmic = { path = "../libcosmic" }
+cosmic-config = { path = "../libcosmic/cosmic-config" }
+cosmic-config-derive = { path = "../libcosmic/cosmic-config-derive" }
+cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+iced = { path = "../libcosmic/iced" }
+iced_accessibility = { path = "../libcosmic/iced/accessibility" }
+iced_core = { path = "../libcosmic/iced/core" }
+iced_debug = { path = "../libcosmic/iced/debug" }
+iced_futures = { path = "../libcosmic/iced/futures" }
+iced_graphics = { path = "../libcosmic/iced/graphics" }
+iced_program = { path = "../libcosmic/iced/program" }
+iced_renderer = { path = "../libcosmic/iced/renderer" }
+iced_runtime = { path = "../libcosmic/iced/runtime" }
+iced_tiny_skia = { path = "../libcosmic/iced/tiny_skia" }
+iced_wgpu = { path = "../libcosmic/iced/wgpu" }
+iced_widget = { path = "../libcosmic/iced/widget" }
+iced_winit = { path = "../libcosmic/iced/winit" }
+
+# WMDE: shared release profile, see .doc/perf.
+#  - panic = "abort" drops .eh_frame and .gcc_except_table; catch_unwind stops catching,
+#    which in this stack only guards SVG parsing in iced's vector backends.
+#  - lto = "fat" with one codegen unit removes what monomorphisation duplicated.
+# The LTO half is expensive and single threaded; FAST=1 turns it off for development
+# builds without touching panic or opt-level, so behaviour still matches what ships.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
