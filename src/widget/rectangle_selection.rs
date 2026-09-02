@@ -13,6 +13,14 @@ use cosmic::widget::{self, Widget};
 
 use crate::screenshot::Rect;
 
+/// How much black lies over everything outside the selection.
+///
+/// Measured off `ref/flameshot.jpg`, which is a photograph of a screen and so gives a range
+/// rather than a number: the clean margins outside the selection sit at 0.46 of the
+/// brightness inside it, the bands either side of the top edge at 0.64. That puts the
+/// reference between 0.36 and 0.54, and this is the middle of it.
+const DIM: f32 = 0.5;
+
 pub const MIME: &str = "X-WMDE-SCREENSHOT-MyData";
 pub struct MyData;
 
@@ -489,7 +497,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
         let dim_whole = |renderer: &mut cosmic::Renderer| {
             let mut overlay = Color::BLACK;
-            overlay.a = 0.3;
+            overlay.a = DIM;
             renderer.fill_quad(
                 Quad {
                     bounds: Rectangle::new(Point::ORIGIN, outer_size),
@@ -523,7 +531,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         // Vulkan driver and the one without. Quads are snapped so the seam against the
         // selection edge does not leave a hairline.
         let mut overlay = Color::BLACK;
-        overlay.a = 0.3;
+        overlay.a = DIM;
 
         let inner = Rectangle::new(
             Point::new(
