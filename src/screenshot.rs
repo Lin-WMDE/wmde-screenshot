@@ -593,7 +593,23 @@ fn save(
         }
     }
 
-    announce(success, image_path.as_deref());
+    match (success, image_path.as_deref()) {
+        (true, Some(path)) => {
+            crate::dbus::answer(&reply, Ok(format!("file://{}", path.display())));
+        }
+        // Nothing on disk to name. A caller waiting for a file gets the honest answer
+        // rather than a URI that leads nowhere.
+        (true, None) => {
+            crate::dbus::answer(&reply, Err("the screenshot went to the clipboard".into()));
+        }
+        (false, _) => crate::dbus::answer(&reply, Err("the screenshot failed".into())),
+    }
+
+    // A caller that asked for a file has its own way of showing the result; the
+    // notification is for the person who pressed a key.
+    if !to_temp {
+        announce(success, image_path.as_deref());
+    }
 
     cmds
 }
