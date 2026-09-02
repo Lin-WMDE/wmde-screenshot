@@ -81,7 +81,10 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
         // Desktop coordinates in, surface coordinates out.
         frame.translate(-self.origin);
 
-        for object in self.editor.drawn().chain(self.editor.in_hand()) {
+        let drawn: Vec<_> = self.editor.drawn().collect();
+        let last = drawn.len().saturating_sub(1);
+
+        for (i, object) in drawn.into_iter().chain(self.editor.in_hand()).enumerate() {
             match object {
                 Object::Path { points, stroke } => {
                     let Some((first, rest)) = points.split_first() else {
@@ -135,6 +138,40 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
                     );
                     frame.stroke(&path, pen(1.0, cosmic::iced::Color::WHITE));
                 }
+                Object::Text {
+                    at,
+                    content,
+                    stroke,
+                } => {
+                    // The caret is a character rather than a drawn line: the text is laid
+                    // out by the toolkit, and asking it where the end landed would cost a
+                    // measurement pass on every frame.
+                    let caret = self.editor.editing() && i == last;
+                    frame.fill_text(canvas::Text {
+                        content: if caret {
+                            format!("{content}|")
+                        } else {
+                            content.clone()
+                        },
+                        position: *at,
+                        color: stroke.color,
+                        size: text_size(stroke.width).into(),
+                        ..canvas::Text::default()
+                    });
+                }
+                Object::Counter { at, number, stroke } => {
+                    let radius = counter_radius(stroke.width);
+                    frame.fill(&Path::circle(*at, radius), stroke.color);
+                    frame.fill_text(canvas::Text {
+                        content: number.to_string(),
+                        position: *at,
+                        color: cosmic::iced::Color::WHITE,
+                        size: (radius * 1.2).into(),
+                        align_x: cosmic::iced::alignment::Horizontal::Center.into(),
+                        align_y: cosmic::iced::alignment::Vertical::Center.into(),
+                        ..canvas::Text::default()
+                    });
+                }
             }
         }
 
@@ -152,6 +189,16 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
             None => mouse::Interaction::default(),
         }
     }
+}
+
+/// Text is sized off the stroke width, so the wheel changes it like everything else.
+pub fn text_size(width: f32) -> f32 {
+    width * 6.0
+}
+
+/// A counter circle big enough to hold two digits at [`text_size`].
+pub fn counter_radius(width: f32) -> f32 {
+    width * 3.5
 }
 
 /// Round ends and joins on everything: a freehand stroke drawn with square caps shows

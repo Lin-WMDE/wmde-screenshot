@@ -17,6 +17,10 @@ pub enum Tool {
     Arrow,
     Rectangle,
     Marker,
+    /// Types a line of text where it is put.
+    Text,
+    /// Drops a numbered circle, one higher each time.
+    Counter,
     /// Softens a rectangle of the shot beyond reading.
     Blur,
     /// Replaces a rectangle with coarse squares.
@@ -34,6 +38,8 @@ impl Tool {
             Self::Arrow => 'a',
             Self::Rectangle => 'r',
             Self::Marker => 'm',
+            Self::Text => 't',
+            Self::Counter => 'c',
             Self::Blur => 'b',
             Self::Pixelate => 'x',
         }
@@ -46,6 +52,8 @@ impl Tool {
             Self::Arrow,
             Self::Rectangle,
             Self::Marker,
+            Self::Text,
+            Self::Counter,
             Self::Blur,
             Self::Pixelate,
         ]
@@ -101,6 +109,19 @@ pub enum Object {
     },
     /// Coarse squares. Same: the width sets how coarse.
     Pixelate { from: Point, to: Point, size: f32 },
+    /// A line of text, anchored at its top left. Its size follows the stroke width, so the
+    /// wheel changes it like everything else.
+    Text {
+        at: Point,
+        content: String,
+        stroke: Stroke,
+    },
+    /// A filled circle with a number in it.
+    Counter {
+        at: Point,
+        number: u32,
+        stroke: Stroke,
+    },
 }
 
 impl Object {
@@ -123,6 +144,11 @@ pub struct Editor {
     pub width: f32,
     /// The object under the pointer right now, not yet placed.
     drawing: Option<Object>,
+    /// Index into `objects` of the text being typed into. While this is set the keyboard
+    /// belongs to that text and not to the tool shortcuts.
+    editing: Option<usize>,
+    /// What the next counter will say.
+    next_number: u32,
 }
 
 impl Default for Editor {
@@ -135,6 +161,8 @@ impl Default for Editor {
             color: Color::from_rgb(0.90, 0.16, 0.16),
             width: 3.0,
             drawing: None,
+            editing: None,
+            next_number: 1,
         }
     }
 }
@@ -165,6 +193,9 @@ impl Editor {
         let Some(tool) = self.tool else {
             return;
         };
+        // Whatever is placed next ends the typing, which keeps the text being edited the
+        // last object in the list - the caret is drawn on that basis.
+        self.finish_text();
         let stroke = tool.stroke(self.width, self.color);
 
         self.drawing = Some(match tool {
@@ -197,6 +228,27 @@ impl Editor {
                 to: at,
                 size: self.width,
             },
+            // These two are placed by the press alone; there is nothing to drag out.
+            Tool::Text => {
+                self.objects.push(Object::Text {
+                    at,
+                    content: String::new(),
+                    stroke,
+                });
+                self.editing = Some(self.objects.len() - 1);
+                self.undone.clear();
+                return;
+            }
+            Tool::Counter => {
+                self.objects.push(Object::Counter {
+                    at,
+                    number: self.next_number,
+                    stroke,
+                });
+                self.next_number += 1;
+                self.undone.clear();
+                return;
+            }
         });
     }
 
@@ -216,7 +268,8 @@ impl Editor {
                 | Object::Blur { to, .. }
                 | Object::Pixelate { to, .. },
             ) => *to = at,
-            None => {}
+            // Placed by the press alone: there is nothing to drag out.
+            Some(Object::Text { .. } | Object::Counter { .. }) | None => {}
         }
     }
 
@@ -234,6 +287,8 @@ impl Editor {
             | Object::Rectangle { from, to, .. }
             | Object::Blur { from, to, .. }
             | Object::Pixelate { from, to, .. } => from.distance(*to) > 2.0,
+            // Placed by the press, never held: they cannot reach here.
+            Object::Text { .. } | Object::Counter { .. } => true,
         };
 
         if worth_keeping {
@@ -263,7 +318,45 @@ impl Editor {
         self.objects.iter().any(Object::is_raster)
     }
 
+    /// Whether a text is being typed into. The keyboard goes there before it goes to the
+    /// tool shortcuts.
+    pub const fn editing(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    pub fn type_char(&mut self, c: char) {
+        if let Some(Object::Text { content, .. }) =
+            self.editing.and_then(|i| self.objects.get_mut(i))
+        {
+            content.push(c);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(Object::Text { content, .. }) =
+            self.editing.and_then(|i| self.objects.get_mut(i))
+        {
+            content.pop();
+        }
+    }
+
+    /// Stop typing. An empty text is dropped: an accidental click must not leave an
+    /// invisible object behind for undo to trip over.
+    pub fn finish_text(&mut self) {
+        let Some(index) = self.editing.take() else {
+            return;
+        };
+        if let Some(Object::Text { content, .. }) = self.objects.get(index)
+            && content.is_empty()
+        {
+            self.objects.remove(index);
+        }
+    }
+
     pub fn undo(&mut self) {
+        // Undo while typing ends the typing first: otherwise the stored index would point
+        // at whatever slid into its place.
+        self.finish_text();
         if let Some(object) = self.objects.pop() {
             self.undone.push(object);
         }
@@ -319,6 +412,9 @@ pub fn bake(image: &mut image::RgbaImage, objects: &[Object], bounds: crate::scr
     if objects.is_empty() {
         return;
     }
+
+    // Counter digits, drawn after the pixmap lands so that the circles are underneath.
+    let mut pending_text: Vec<(String, f32, f32, f32, cosmic::iced::Color)> = Vec::new();
 
     let (width, height) = (image.width(), image.height());
     let Some(mut pixmap) = Pixmap::new(width, height) else {
@@ -391,6 +487,55 @@ pub fn bake(image: &mut image::RgbaImage, objects: &[Object], bounds: crate::scr
             }
             // Already in the picture.
             Object::Blur { .. } | Object::Pixelate { .. } => continue,
+            Object::Text {
+                at: anchor,
+                content,
+                stroke,
+            } => {
+                let (x, y) = at(*anchor);
+                draw_text(
+                    image,
+                    content,
+                    x,
+                    y,
+                    crate::widget::annotations::text_size(stroke.width) * scale,
+                    stroke.color,
+                    false,
+                );
+                continue;
+            }
+            Object::Counter {
+                at: anchor,
+                number,
+                stroke,
+            } => {
+                let (x, y) = at(*anchor);
+                let radius = crate::widget::annotations::counter_radius(stroke.width) * scale;
+                let mut circle = PathBuilder::new();
+                circle.push_circle(x, y, radius);
+                if let Some(path) = circle.finish() {
+                    let mut paint = Paint::default();
+                    paint.anti_alias = true;
+                    paint.set_color_rgba8(
+                        (stroke.color.r * 255.0) as u8,
+                        (stroke.color.g * 255.0) as u8,
+                        (stroke.color.b * 255.0) as u8,
+                        (stroke.color.a * 255.0) as u8,
+                    );
+                    pixmap.fill_path(
+                        &path,
+                        &paint,
+                        tiny_skia::FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+                // The number goes straight into the image rather than the pixmap: the
+                // pixmap is composited afterwards, and the circle has to be under the
+                // digits, not over them.
+                pending_text.push((number.to_string(), x, y, radius * 1.2, stroke.color));
+                continue;
+            }
         };
 
         let Some(path) = builder.finish() else {
@@ -418,6 +563,7 @@ pub fn bake(image: &mut image::RgbaImage, objects: &[Object], bounds: crate::scr
 
     // tiny-skia works premultiplied and the captured frame does not, so the marks are
     // composited by hand rather than copied over.
+    #[allow(clippy::needless_range_loop)]
     for (pixel, drawn) in image.pixels_mut().zip(pixmap.pixels()) {
         let a = drawn.alpha() as f32 / 255.0;
         if a <= 0.0 {
@@ -577,6 +723,69 @@ mod tests {
     }
 
     #[test]
+    fn text_and_counters_reach_the_file() {
+        // White, so any glyph shows as something darker.
+        let mut image = image::RgbaImage::from_pixel(200, 200, image::Rgba([255, 255, 255, 255]));
+        let stroke = Stroke {
+            width: 4.0,
+            color: Color::BLACK,
+        };
+        bake(
+            &mut image,
+            &[
+                Object::Text {
+                    at: Point::new(10.0, 20.0),
+                    content: "Hi".to_string(),
+                    stroke,
+                },
+                Object::Counter {
+                    at: Point::new(120.0, 120.0),
+                    number: 7,
+                    stroke,
+                },
+            ],
+            whole(200),
+        );
+
+        let darkened = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .any(|(x, y)| image.get_pixel(x, y).0[0] < 200)
+        };
+
+        // The circle is geometry and always lands.
+        assert!(darkened(100, 100, 160, 160), "the counter left no circle");
+
+        // Glyphs need installed fonts, and the build container has none - `fc-list` there
+        // returns nothing. Saying so beats a test that fails for want of a font file.
+        if text_faces_available() == 0 {
+            eprintln!("no fonts in this environment: glyph drawing was not checked");
+            return;
+        }
+        assert!(darkened(0, 0, 100, 80), "the text left no glyphs");
+    }
+
+    /// Faces that can actually put a letter on screen. The toolkit embeds an icon font,
+    /// so a font system is never quite empty even where no text font is installed.
+    fn text_faces_available() -> usize {
+        cosmic::iced::advanced::graphics::text::font_system()
+            .write()
+            .map(|mut system| {
+                system
+                    .raw()
+                    .db()
+                    .faces()
+                    .filter(|face| {
+                        face.families
+                            .iter()
+                            .all(|(name, _)| !name.contains("Icons"))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    #[test]
     fn baking_puts_the_mark_where_the_preview_had_it() {
         // A 100x100 image over a 100x100 piece of desktop at (0, 0): one logical unit is
         // one pixel, so a horizontal line at y=50 has to land on row 50 and nowhere else.
@@ -611,6 +820,85 @@ mod tests {
             "nothing may be drawn away from the line"
         );
     }
+}
+
+/// Rasterise one line of text into the image, at the size and colour it was drawn with.
+///
+/// Glyphs come from the toolkit's own font system - the one the preview drew with - so the
+/// file gets the same typeface and the same shaping, and no second font scan happens.
+/// `centred` puts the middle of the line on the point instead of its top left, which is
+/// what a counter needs and a text label does not.
+fn draw_text(
+    image: &mut image::RgbaImage,
+    content: &str,
+    x: f32,
+    y: f32,
+    size: f32,
+    color: cosmic::iced::Color,
+    centred: bool,
+) {
+    use cosmic_text::{Attrs, Buffer, Metrics, Shaping, SwashCache};
+
+    if content.is_empty() {
+        return;
+    }
+
+    let font_system = cosmic::iced::advanced::graphics::text::font_system();
+    let Ok(mut guard) = font_system.write() else {
+        tracing::error!("the font system is poisoned: text not drawn");
+        return;
+    };
+    let font_system = guard.raw();
+
+    let mut buffer = Buffer::new(font_system, Metrics::new(size, size * 1.25));
+    buffer.set_text(content, &Attrs::new(), Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, false);
+
+    let (mut left, mut top) = (x, y);
+    if centred {
+        let width = buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0_f32, f32::max);
+        left -= width / 2.0;
+        top -= size * 1.25 / 2.0;
+    }
+
+    let (image_w, image_h) = (image.width() as i32, image.height() as i32);
+    let mut cache = SwashCache::new();
+
+    buffer.draw(
+        font_system,
+        &mut cache,
+        cosmic_text::Color::rgba(
+            (color.r * 255.0) as u8,
+            (color.g * 255.0) as u8,
+            (color.b * 255.0) as u8,
+            (color.a * 255.0) as u8,
+        ),
+        |gx, gy, w, h, glyph_color| {
+            let alpha = glyph_color.a() as f32 / 255.0;
+            if alpha <= 0.0 {
+                return;
+            }
+            for dy in 0..h as i32 {
+                for dx in 0..w as i32 {
+                    let px = left as i32 + gx + dx;
+                    let py = top as i32 + gy + dy;
+                    if px < 0 || py < 0 || px >= image_w || py >= image_h {
+                        continue;
+                    }
+                    let pixel = image.get_pixel_mut(px as u32, py as u32);
+                    for (i, c) in [glyph_color.r(), glyph_color.g(), glyph_color.b()]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        pixel.0[i] = (c as f32 * alpha + pixel.0[i] as f32 * (1.0 - alpha)) as u8;
+                    }
+                }
+            }
+        },
+    );
 }
 
 /// Apply the tools that change the picture itself, in the order they were placed.

@@ -7197,6 +7197,7 @@ dependencies = [
  "cosmic-client-toolkit",
  "cosmic-config",
  "cosmic-protocols",
+ "cosmic-text",
  "dirs",
  "futures",
  "gbm",

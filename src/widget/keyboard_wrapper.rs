@@ -8,18 +8,18 @@ use cosmic::iced::core::{
 #[allow(missing_debug_implementations)]
 pub struct KeyboardWrapper<'a, Message> {
     content: Element<'a, Message, cosmic::Theme, cosmic::Renderer>,
-    handler: fn(keyboard::Key, keyboard::Modifiers) -> Option<Message>,
+    handler: Box<dyn Fn(keyboard::Key, keyboard::Modifiers) -> Option<Message> + 'a>,
 }
 
 impl<'a, Message> KeyboardWrapper<'a, Message> {
     /// Creates a [`KeyboardWrapper`] with the given content.
     pub fn new(
         content: impl Into<Element<'a, Message, cosmic::Theme, cosmic::Renderer>>,
-        handler: fn(keyboard::Key, keyboard::Modifiers) -> Option<Message>,
+        handler: impl Fn(keyboard::Key, keyboard::Modifiers) -> Option<Message> + 'a,
     ) -> Self {
         KeyboardWrapper {
             content: content.into(),
-            handler,
+            handler: Box::new(handler),
         }
     }
 }

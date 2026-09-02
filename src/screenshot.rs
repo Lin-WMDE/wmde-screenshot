@@ -371,6 +371,11 @@ pub enum Msg {
     Color(cosmic::iced::Color),
     Undo,
     Redo,
+    /// A character typed into the text being edited.
+    Type(char),
+    Backspace,
+    /// Stop typing, keeping what was typed.
+    FinishText,
     Capture,
     CaptureWithLocation(ImageSaveLocation),
     Cancel,
@@ -453,6 +458,7 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
         return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let theme = app.core.system_theme().cosmic();
+    let editing = app.editor.editing();
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
@@ -486,7 +492,7 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
             .map(Msg::Draw),
             editor_bar(app),
         ),
-        |key, modifiers| {
+        move |key, modifiers| {
             if modifiers.control() {
                 match key {
                     Key::Named(Named::Copy) => {
@@ -511,6 +517,17 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
                     }
                     _ => {}
                 }
+            }
+
+            // While a text is being typed the keyboard belongs to it. Otherwise every
+            // letter would change the tool instead of appearing on the shot.
+            if editing {
+                return match key {
+                    Key::Character(ref value) => value.as_str().chars().next().map(Msg::Type),
+                    Key::Named(Named::Backspace) => Some(Msg::Backspace),
+                    Key::Named(Named::Enter | Named::Escape) => Some(Msg::FinishText),
+                    _ => None,
+                };
             }
 
             match key {
@@ -707,6 +724,18 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             refresh_preview(app);
             cosmic::Task::none()
         }
+        Msg::Type(c) => {
+            app.editor.type_char(c);
+            cosmic::Task::none()
+        }
+        Msg::Backspace => {
+            app.editor.backspace();
+            cosmic::Task::none()
+        }
+        Msg::FinishText => {
+            app.editor.finish_text();
+            cosmic::Task::none()
+        }
         Msg::Capture => {
             let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = app
                 .outputs
@@ -717,6 +746,7 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
                 tracing::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Task::batch(cmds);
             };
+            app.editor.finish_text();
             let objects: Vec<_> = app.editor.objects().cloned().collect();
             cmds.extend(save(
                 &app.outputs,
@@ -1153,6 +1183,8 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
         (Tool::Arrow, "draw-arrow"),
         (Tool::Rectangle, "draw-rectangle-symbolic"),
         (Tool::Marker, "marker-symbolic"),
+        (Tool::Text, "draw-text-symbolic"),
+        (Tool::Counter, "list-add-symbolic"),
         (Tool::Blur, "image-filter-symbolic"),
         (Tool::Pixelate, "view-grid-symbolic"),
     ] {
