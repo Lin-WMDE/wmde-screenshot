@@ -1,3 +1,4 @@
+use async_io::Timer;
 use cosmic_client_toolkit::screencopy::{
     CaptureCursorSession, CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason,
     Formats, Frame, ScreencopyCursorSessionData, ScreencopyCursorSessionDataExt,
@@ -15,7 +16,7 @@ use cosmic_client_toolkit::sctk::shm::{Shm, ShmHandler};
 use cosmic_client_toolkit::sctk::{self};
 use cosmic_client_toolkit::toplevel_info::{ToplevelInfo, ToplevelInfoState};
 use cosmic_client_toolkit::workspace::WorkspaceState;
-use async_io::Timer;
+use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
 use futures::channel::oneshot;
 use futures::future::{Either, select};
 use futures::stream::{FuturesOrdered, Stream, StreamExt};
@@ -405,11 +406,17 @@ impl WaylandHelper {
         // later capture attempt surfaces the failure via CAPTURE_TIMEOUT), but log it
         // honestly as a connection/protocol error.
         if let Err(err) = event_queue.flush() {
-            tracing::warn!("initial wayland flush failed (connection/protocol error): {}", err);
+            tracing::warn!(
+                "initial wayland flush failed (connection/protocol error): {}",
+                err
+            );
         }
 
         if let Err(err) = event_queue.roundtrip(&mut data) {
-            tracing::warn!("initial wayland roundtrip failed (connection/protocol error): {}", err);
+            tracing::warn!(
+                "initial wayland roundtrip failed (connection/protocol error): {}",
+                err
+            );
         }
 
         thread::spawn(move || {
@@ -420,7 +427,10 @@ impl WaylandHelper {
             let _guard = EventLoopGuard(data.wayland_helper.clone());
             loop {
                 if let Err(err) = event_queue.blocking_dispatch(&mut data) {
-                    tracing::error!("wayland event dispatch failed, stopping event loop: {}", err);
+                    tracing::error!(
+                        "wayland event dispatch failed, stopping event loop: {}",
+                        err
+                    );
                     break;
                 }
             }
@@ -475,6 +485,32 @@ impl WaylandHelper {
         }
     }
 
+    /// Where the focused window sits among the frames `capture_output_toplevels_shm`
+    /// yields for this output. Same list in the same order - both walk `output_toplevels` -
+    /// so the index addresses the frame of the window that has focus.
+    ///
+    /// `None` when nothing on this output is focused, which is the honest answer: shooting
+    /// "the current window" with no current window is a guess, not a screenshot.
+    pub fn active_toplevel_index(&self, output: &wl_output::WlOutput) -> Option<usize> {
+        let handles = self
+            .inner
+            .output_toplevels
+            .lock()
+            .unwrap()
+            .get(output)
+            .cloned()?;
+        let toplevels = self.inner.toplevels.lock().unwrap();
+
+        handles.iter().position(|handle| {
+            toplevels.iter().any(|info| {
+                &info.foreign_toplevel == handle
+                    && info
+                        .state
+                        .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+            })
+        })
+    }
+
     pub fn capture_output_toplevels_shm<'a>(
         &'a self,
         output: &wl_output::WlOutput,
@@ -526,7 +562,10 @@ impl WaylandHelper {
                 .unwrap();
 
             if let Err(err) = self.inner.conn.flush() {
-                tracing::warn!("wayland flush failed while creating capture session: {}", err);
+                tracing::warn!(
+                    "wayland flush failed while creating capture session: {}",
+                    err
+                );
             }
 
             SessionInner {

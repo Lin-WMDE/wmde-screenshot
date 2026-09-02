@@ -52,13 +52,33 @@ pub struct Rect {
     pub bottom: i32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Screenshot {
     pub save_location: ImageSaveLocation,
     pub choice: Choice,
     #[serde(default)]
     pub last_rectangle: Option<Rect>,
+    /// Name of the saved file, as a `strftime` pattern in local time. Anything `strftime`
+    /// takes works; the extension is part of the pattern, so changing it to `.jpg` would
+    /// only rename a PNG.
+    #[serde(default = "default_filename")]
+    pub filename: String,
+}
+
+fn default_filename() -> String {
+    "Screenshot_%Y-%m-%d_%H-%M-%S.png".to_string()
+}
+
+impl Default for Screenshot {
+    fn default() -> Self {
+        Self {
+            save_location: ImageSaveLocation::default(),
+            choice: Choice::default(),
+            last_rectangle: None,
+            filename: default_filename(),
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]

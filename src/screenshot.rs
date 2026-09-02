@@ -145,6 +145,10 @@ impl Capturer {
         Self { wayland_helper }
     }
 
+    fn active_toplevel_index(&self, output: &WlOutput) -> Option<usize> {
+        self.wayland_helper.active_toplevel_index(output)
+    }
+
     async fn interactive_toplevel_images(
         &self,
         outputs: &[Output],
@@ -207,7 +211,7 @@ impl Capturer {
         Ok(buffer)
     }
 
-    pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
+    pub fn get_img_path(location: ImageSaveLocation, filename: &str) -> Option<PathBuf> {
         let mut path = match location {
             ImageSaveLocation::Pictures => {
                 // First check for XDG_SCREENSHOTS_DIR environment variable
@@ -233,10 +237,7 @@ impl Capturer {
             return None;
         }
 
-        let name = jiff::Zoned::now()
-            .strftime("Screenshot_%Y-%m-%d_%H-%M-%S.png")
-            .to_string();
-        path.push(name);
+        path.push(jiff::Zoned::now().strftime(filename).to_string());
 
         Some(path)
     }
@@ -396,6 +397,9 @@ pub struct Args {
     pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
+    /// Whether the overlay is put up at all. `full`, `screen` and `window` shoot straight
+    /// from the key press; only `gui` asks.
+    pub interactive: bool,
 }
 
 struct Output {
@@ -466,10 +470,110 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
     .into()
 }
 
-pub fn update_msg(
-    app: &mut App,
-    msg: Msg,
-) -> cosmic::Task<cosmic::Action<Message>> {
+/// Turn frames plus a choice into a file on disk, bytes on the clipboard, or both. The
+/// returned tasks are the clipboard writes - the only part of saving that iced has to do.
+///
+/// Shared by both ways in: the overlay's capture button, and the requests that never put an
+/// overlay up at all.
+fn save(
+    outputs: &[OutputState],
+    args: Args,
+    filename: &str,
+) -> Vec<cosmic::Task<cosmic::Action<Message>>> {
+    let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = Vec::new();
+    let outputs = outputs.to_vec();
+    let Args {
+        choice,
+        output_images: mut images,
+        location,
+        ..
+    } = args;
+
+    let mut success = true;
+    let image_path = Capturer::get_img_path(location, filename);
+
+    match choice {
+        Choice::Output(name) => {
+            if let Some(img) = images.remove(&name) {
+                if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
+                    .inspect_err(|err| {
+                        tracing::error!("Failed to capture screenshot: {:?}", err);
+                        success = false;
+                    })
+                {
+                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                }
+            } else {
+                tracing::error!("Failed to find output {}", name);
+                success = false;
+            }
+        }
+        Choice::Rectangle(r, s) => {
+            if let Some(RectDimension { width, height }) = r.dimensions() {
+                // Construct Rgba image with size of rect
+                // then overlay the part of each image that intersects with the rect
+                //let mut img = RgbaImage::new(width.get(), height.get());
+
+                let frames = images
+                    .into_iter()
+                    .filter_map(|(name, raw_img)| {
+                        let output = outputs.iter().find(|o| o.name == name)?;
+                        let pos = output.logical_pos;
+                        let output_rect = Rect {
+                            left: pos.0,
+                            top: pos.1,
+                            right: pos.0 + output.logical_size.0 as i32,
+                            bottom: pos.1 + output.logical_size.1 as i32,
+                        };
+
+                        let intersect = r.intersect(output_rect)?;
+
+                        Some((raw_img.rgba, output_rect))
+                    })
+                    .collect::<Vec<_>>();
+                let img = combined_image(r, frames);
+
+                if let Ok(buffer) =
+                    Capturer::save_rgba(&img, image_path.as_deref()).inspect_err(|err| {
+                        tracing::error!("Failed to capture screenshot: {:?}", err);
+                        success = false;
+                    })
+                {
+                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                }
+            } else {
+                success = false;
+            }
+        }
+        Choice::Window(output, Some(window_i)) => {
+            if let Some(img) = args
+                .toplevel_images
+                .get(&output)
+                .and_then(|imgs| imgs.get(window_i))
+            {
+                if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
+                    .inspect_err(|err| {
+                        tracing::error!("Failed to capture screenshot: {:?}", err);
+                        success = false;
+                    })
+                {
+                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                }
+            } else {
+                success = false;
+            }
+        }
+        _ => {
+            success = false;
+        }
+    }
+
+    announce(success, image_path.as_deref());
+
+    cmds
+}
+
+pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Message>> {
     match msg {
         Msg::Capture => {
             let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = app
@@ -481,99 +585,7 @@ pub fn update_msg(
                 tracing::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Task::batch(cmds);
             };
-            let outputs = app.outputs.clone();
-            let Args {
-                choice,
-                output_images: mut images,
-                location,
-                ..
-            } = args;
-
-            let mut success = true;
-            let image_path = Capturer::get_img_path(location);
-
-            match choice {
-                Choice::Output(name) => {
-                    if let Some(img) = images.remove(&name) {
-                        if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
-                            .inspect_err(|err| {
-                                tracing::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        tracing::error!("Failed to find output {}", name);
-                        success = false;
-                    }
-                }
-                Choice::Rectangle(r, s) => {
-                    if let Some(RectDimension { width, height }) = r.dimensions() {
-                        // Construct Rgba image with size of rect
-                        // then overlay the part of each image that intersects with the rect
-                        //let mut img = RgbaImage::new(width.get(), height.get());
-
-                        let frames = images
-                            .into_iter()
-                            .filter_map(|(name, raw_img)| {
-                                let output = outputs.iter().find(|o| o.name == name)?;
-                                let pos = output.logical_pos;
-                                let output_rect = Rect {
-                                    left: pos.0,
-                                    top: pos.1,
-                                    right: pos.0 + output.logical_size.0 as i32,
-                                    bottom: pos.1 + output.logical_size.1 as i32,
-                                };
-
-                                let intersect = r.intersect(output_rect)?;
-
-                                Some((raw_img.rgba, output_rect))
-                            })
-                            .collect::<Vec<_>>();
-                        let img = combined_image(r, frames);
-
-                        if let Ok(buffer) = Capturer::save_rgba(&img, image_path.as_deref())
-                            .inspect_err(|err| {
-                                tracing::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        success = false;
-                    }
-                }
-                Choice::Window(output, Some(window_i)) => {
-                    if let Some(img) = args
-                        .toplevel_images
-                        .get(&output)
-                        .and_then(|imgs| imgs.get(window_i))
-                    {
-                        if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
-                            .inspect_err(|err| {
-                                tracing::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        success = false;
-                    }
-                }
-                _ => {
-                    success = false;
-                }
-            }
-
-            match (success, image_path.as_deref()) {
-                (true, Some(path)) => tracing::info!("screenshot saved to {}", path.display()),
-                (true, None) => tracing::info!("screenshot copied to the clipboard"),
-                (false, _) => tracing::error!("screenshot failed"),
-            }
-
+            cmds.extend(save(&app.outputs, args, &app.config.screenshot.filename));
             cosmic::Task::batch(cmds)
         }
         Msg::CaptureWithLocation(location) => {
@@ -616,13 +628,11 @@ pub fn update_msg(
                 tracing::error!("Failed to find screenshot Args for Choice message.");
             }
             if should_save_config {
-                cosmic::task::message(Message::ConfigSet(
-                    config::Screenshot {
-                        choice,
-                        last_rectangle: last_rect,
-                        ..app.config.screenshot
-                    },
-                ))
+                cosmic::task::message(Message::ConfigSet(config::Screenshot {
+                    choice,
+                    last_rectangle: last_rect,
+                    ..app.config.screenshot.clone()
+                }))
             } else {
                 cosmic::Task::none()
             }
@@ -630,8 +640,7 @@ pub fn update_msg(
         Msg::OutputChanged(wl_output) => {
             if let (Some(args), Some(o)) = (
                 app.screenshot_args.as_mut(),
-                app
-                    .outputs
+                app.outputs
                     .iter()
                     .find(|o| o.output == wl_output)
                     .map(|o| o.name.clone()),
@@ -669,13 +678,10 @@ pub fn update_msg(
                     _ => args.location,
                 };
                 args.location = loc;
-                cosmic::task::message(Message::ConfigSet(
-                    config::Screenshot {
-                        save_location: loc,
-                        choice: (&mut app.config.screenshot.choice).into(),
-                        last_rectangle: app.config.screenshot.last_rectangle,
-                    },
-                ))
+                cosmic::task::message(Message::ConfigSet(config::Screenshot {
+                    save_location: loc,
+                    ..app.config.screenshot.clone()
+                }))
             } else {
                 tracing::error!("Failed to find screenshot Args for Location message.");
                 cosmic::Task::none()
@@ -684,10 +690,7 @@ pub fn update_msg(
     }
 }
 
-pub fn update_args(
-    app: &mut App,
-    args: Args,
-) -> cosmic::Task<cosmic::Action<Message>> {
+pub fn update_args(app: &mut App, args: Args) -> cosmic::Task<cosmic::Action<Message>> {
     let Args {
         output_images: images,
         ..
@@ -743,34 +746,30 @@ pub fn update_args(
         let cmds: Vec<_> = app
             .outputs
             .iter()
-            .map(
-                |state: &OutputState| {
-                    let id = state.id;
-                    let output = state.output.clone();
-                    let name = state.name.clone();
-                    cosmic::surface::surface_task::<Message>(
-                cosmic::surface::action::simple_layer_shell::<Message>(
-                    Default::default,
-                        move || {
-                            SctkLayerSurfaceSettings {
-                                    id,
-                                    layer: Layer::Overlay,
-                                    keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                                    input_zone: None,
-                                    anchor: Anchor::all(),
-                                    output: IcedOutput::Output(output.clone()),
-                                    namespace: "screenshot".to_string(),
-                                    size: Some((None, None)),
-                                    exclusive_zone: -1,
-                                    size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
-                                    ..Default::default()
-                                }
-                            },
+            .map(|state: &OutputState| {
+                let id = state.id;
+                let output = state.output.clone();
+                let name = state.name.clone();
+                cosmic::surface::surface_task::<Message>(
+                    cosmic::surface::action::simple_layer_shell::<Message>(
+                        Default::default,
+                        move || SctkLayerSurfaceSettings {
+                            id,
+                            layer: Layer::Overlay,
+                            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                            input_zone: None,
+                            anchor: Anchor::all(),
+                            output: IcedOutput::Output(output.clone()),
+                            namespace: "screenshot".to_string(),
+                            size: Some((None, None)),
+                            exclusive_zone: -1,
+                            size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
+                            ..Default::default()
+                        },
                         None::<fn() -> cosmic::Element<'static, cosmic::Action<Message>>>,
-                        ),
-                    )
-                },
-            )
+                    ),
+                )
+            })
             .collect();
         cosmic::Task::batch(cmds)
     } else {
@@ -828,19 +827,25 @@ pub async fn capture(
     let choice = match request {
         Request::Screen => Choice::Output(active_name.unwrap_or_else(|| first.name.clone())),
         Request::Full => Choice::Rectangle(desktop_rect(&outputs), DragState::None),
-        Request::Window => Choice::Window(
-            active_name.unwrap_or_else(|| first.name.clone()),
-            None,
-        ),
+        // The window in focus, by index into the frames just taken of that output. No
+        // focused window means nothing to shoot, and the request is dropped rather than
+        // guessed at.
+        Request::Window => {
+            let name = active_name.clone().unwrap_or_else(|| first.name.clone());
+            let output = outputs.iter().find(|o| o.name == name)?;
+            let index = capturer.active_toplevel_index(&output.output)?;
+            Choice::Window(name, Some(index))
+        }
         Request::Gui => match &config.choice {
             config::Choice::Output(Some(name)) if outputs.iter().any(|o| &o.name == name) => {
                 Choice::Output(name.clone())
             }
             config::Choice::Output(_) => {
-                Choice::Output(active_name.unwrap_or_else(|| first.name.clone()))
+                Choice::Output(active_name.clone().unwrap_or_else(|| first.name.clone()))
             }
+            // No index: the overlay opens on the window picker and the person chooses.
             config::Choice::Window => Choice::Window(
-                active_name.unwrap_or_else(|| first.name.clone()),
+                active_name.clone().unwrap_or_else(|| first.name.clone()),
                 None,
             ),
             config::Choice::Rectangle => Choice::Rectangle(
@@ -863,7 +868,14 @@ pub async fn capture(
         toplevel_images,
         choice,
         location: config.save_location,
+        interactive: matches!(request, Request::Gui),
     })
+}
+
+/// Shoot without asking. Used by `full`, `screen` and `window`, where the request already
+/// says what to take.
+pub fn shoot(app: &App, args: Args) -> cosmic::Task<cosmic::Action<Message>> {
+    cosmic::Task::batch(save(&app.outputs, args, &app.config.screenshot.filename))
 }
 
 /// The rectangle that covers every output.
@@ -878,4 +890,37 @@ fn desktop_rect(outputs: &[Output]) -> Rect {
         rect.bottom = rect.bottom.max(y + h);
     }
     rect
+}
+
+/// Tell the person what happened. A shot saved to a file with no word about it is
+/// indistinguishable from a shot that failed - both leave the screen exactly as it was.
+fn announce(success: bool, path: Option<&Path>) {
+    let (summary, body) = match (success, path) {
+        (true, Some(path)) => {
+            tracing::info!("screenshot saved to {}", path.display());
+            (fl!("saved"), path.display().to_string())
+        }
+        (true, None) => {
+            tracing::info!("screenshot copied to the clipboard");
+            (fl!("copied"), String::new())
+        }
+        (false, _) => {
+            tracing::error!("screenshot failed");
+            (fl!("failed"), String::new())
+        }
+    };
+
+    // Blocking: notify-rust talks to the notification daemon over D-Bus, and the overlay
+    // is being torn down on this thread.
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = notify_rust::Notification::new()
+            .appname("WMDE")
+            .summary(&summary)
+            .body(&body)
+            .icon("applets-screenshooter")
+            .show()
+        {
+            tracing::warn!("cannot show the notification: {err}");
+        }
+    });
 }

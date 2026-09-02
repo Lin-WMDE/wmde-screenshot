@@ -29,7 +29,13 @@ pub fn run() -> cosmic::iced::Result {
 
     let (config, config_handler) = config::Config::load();
 
-    cosmic::app::run::<Screenshot>(settings, Flags { config, config_handler })
+    cosmic::app::run::<Screenshot>(
+        settings,
+        Flags {
+            config,
+            config_handler,
+        },
+    )
 }
 
 pub struct Flags {
@@ -97,10 +103,7 @@ impl cosmic::Application for Screenshot {
         &mut self.core
     }
 
-    fn init(
-        mut core: app::Core,
-        flags: Flags,
-    ) -> (Self, cosmic::Task<cosmic::Action<Message>>) {
+    fn init(mut core: app::Core, flags: Flags) -> (Self, cosmic::Task<cosmic::Action<Message>>) {
         core.set_app_type(cosmic::core::AppType::System);
 
         (
@@ -122,7 +125,13 @@ impl cosmic::Application for Screenshot {
     fn update(&mut self, message: Message) -> cosmic::Task<cosmic::Action<Message>> {
         match message {
             Message::Request(request) => self.request(request),
-            Message::Captured(args) => screenshot::update_args(self, *args),
+            Message::Captured(args) => {
+                if args.interactive {
+                    screenshot::update_args(self, *args)
+                } else {
+                    screenshot::shoot(self, *args)
+                }
+            }
             Message::Screenshot(msg) => screenshot::update_msg(self, msg),
             Message::Output(event, output) => self.output_event(event, output),
             Message::ConfigSet(screenshot) => {
@@ -166,12 +175,9 @@ impl cosmic::Application for Screenshot {
             // output as the compositor announces it, and the overlay needs all of them
             // before it can cover the desktop.
             event::listen_with(|event, _, _| match event {
-                cosmic::iced::Event::PlatformSpecific(
-                    event::PlatformSpecific::Wayland(event::wayland::Event::Output(
-                        output_event,
-                        output,
-                    )),
-                ) => Some(Message::Output(output_event, output)),
+                cosmic::iced::Event::PlatformSpecific(event::PlatformSpecific::Wayland(
+                    event::wayland::Event::Output(output_event, output),
+                )) => Some(Message::Output(output_event, output)),
                 _ => None,
             }),
         ])
@@ -235,7 +241,10 @@ impl Screenshot {
                     output,
                     id: window::Id::unique(),
                     name: info.name.unwrap(),
-                    logical_size: info.logical_size.map(|(w, h)| (w as u32, h as u32)).unwrap(),
+                    logical_size: info
+                        .logical_size
+                        .map(|(w, h)| (w as u32, h as u32))
+                        .unwrap(),
                     logical_pos: info.logical_position.unwrap(),
                     has_pointer: false,
                     bg_source: None,
@@ -247,7 +256,10 @@ impl Screenshot {
                     && info.logical_size.is_some()
                     && info.logical_position.is_some() =>
             {
-                let size = info.logical_size.map(|(w, h)| (w as u32, h as u32)).unwrap();
+                let size = info
+                    .logical_size
+                    .map(|(w, h)| (w as u32, h as u32))
+                    .unwrap();
                 let pos = info.logical_position.unwrap();
                 let name = info.name.unwrap();
                 if let Some(state) = self.outputs.iter_mut().find(|o| o.output == output) {
