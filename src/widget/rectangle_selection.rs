@@ -532,7 +532,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             bounds: translated_clipped_inner_rect,
             border: Border {
                 radius: 0.0.into(),
-                width: 4.0,
+                width: 2.0,
                 color: accent,
             },
             shadow: Shadow::default(),
@@ -540,16 +540,26 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         };
         renderer.fill_quad(quad, Color::TRANSPARENT);
 
-        // draw handles as quads with radius_s
-        let radius_s = cosmic.radius_s();
+        // Eight round handles sitting on the border - four corners and four edge middles,
+        // as the reference has them. Circles rather than rounded squares: at this size a
+        // rounded square reads as a smudge, and the corner radius fights the border it
+        // sits on.
+        let (mid_x, mid_y) = (
+            inner_rect.x + inner_rect.width / 2.0,
+            inner_rect.y + inner_rect.height / 2.0,
+        );
         for (x, y) in &[
             (inner_rect.x, inner_rect.y),
+            (mid_x, inner_rect.y),
             (inner_rect.x + inner_rect.width, inner_rect.y),
-            (inner_rect.x, inner_rect.y + inner_rect.height),
+            (inner_rect.x + inner_rect.width, mid_y),
             (
                 inner_rect.x + inner_rect.width,
                 inner_rect.y + inner_rect.height,
             ),
+            (mid_x, inner_rect.y + inner_rect.height),
+            (inner_rect.x, inner_rect.y + inner_rect.height),
+            (inner_rect.x, mid_y),
         ] {
             if !outer_rect.contains(Point::new(*x, *y)) {
                 continue;
@@ -566,12 +576,15 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             let quad = Quad {
                 bounds,
                 border: Border {
-                    radius: radius_s.into(),
+                    // Half the side: a circle.
+                    radius: (CORNER_DIAMETER / 2.0).into(),
                     width: 0.0,
                     color: Color::TRANSPARENT,
                 },
                 shadow: Shadow::default(),
-                snap: true,
+                // Not snapped: a circle pushed onto the pixel grid comes out lopsided,
+                // and unlike a fill it has no edge that has to meet anything.
+                snap: false,
             };
             renderer.fill_quad(quad, accent);
         }

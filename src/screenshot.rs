@@ -471,16 +471,12 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
             args.choice.clone(),
             img,
             Msg::Capture,
-            Msg::Cancel,
             output,
             id,
             Msg::OutputChanged,
             Msg::Choice,
             &args.toplevel_images,
             Msg::WindowChosen,
-            &app.location_options,
-            args.location as usize,
-            Msg::Location,
             theme.spacing,
             i as u128,
             // The drawing layer. It answers to the pointer only while a tool is in hand;
@@ -498,7 +494,7 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
                 .height(Length::Fill),
             )
             .map(Msg::Draw),
-            editor_bar(app),
+            editor_bar(app, output),
         ),
         move |key, modifiers| {
             if modifiers.control() {
@@ -1217,43 +1213,37 @@ fn announce(success: bool, path: Option<&Path>) {
 }
 
 /// The drawing half of the toolbar: what to draw with, in what colour, how thick, and the
-/// two arrows that take it back. Built here rather than inside the widget because this is
-/// where the tool, the colour and the width live.
-fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
+/// two arrows that take it back.
+///
+/// Round filled buttons in a single row with nothing behind them, as the reference has
+/// them. A panel would put a second rectangle beside the selection and make the strip
+/// heavier than the picture it sits on.
+fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> {
     use crate::editor::Tool;
     use cosmic::iced::{Alignment, Background, Border};
-    use cosmic::widget::{button, container, divider, icon, row, space, text};
+    use cosmic::widget::{button, container, row, space};
 
     let theme = app.core.system_theme().cosmic();
     let spacing = theme.spacing;
+    let accent = cosmic::iced::Color::from(theme.accent_color());
 
     let tool_button = |tool: Tool, name: &'static str| {
         let chosen = app.editor.tool == Some(tool);
-        button::custom(
-            icon::Icon::from(icon::from_name(name).size(48))
-                .width(Length::Fixed(28.0))
-                .height(Length::Fixed(28.0)),
-        )
-        .selected(chosen)
-        .class(cosmic::theme::Button::Icon)
-        .padding(spacing.space_xxs)
-        // Pressing the tool that is already in hand puts it down, which is how a person
-        // gets back to moving the selection without reaching for Escape.
-        .on_press(Msg::Tool((!chosen).then_some(tool)))
+        round_button(name, chosen).on_press(Msg::Tool((!chosen).then_some(tool)))
     };
 
     let swatch = |color: cosmic::iced::Color| {
         let chosen = color == app.editor.color;
         button::custom(
-            container(space::horizontal().width(Length::Fixed(16.0)))
-                .height(Length::Fixed(16.0))
+            container(space::horizontal().width(Length::Fixed(SWATCH)))
+                .height(Length::Fixed(SWATCH))
                 .class(cosmic::theme::Container::custom(move |_| {
                     cosmic::iced::widget::container::Style {
                         background: Some(Background::Color(color)),
                         border: Border {
-                            radius: 8.0.into(),
-                            // The chosen colour is the one with a ring, because a swatch
-                            // cannot show selection by changing colour.
+                            radius: (SWATCH / 2.0).into(),
+                            // The chosen colour is the one with a ring: a swatch cannot
+                            // show selection by changing colour.
                             width: if chosen { 2.0 } else { 0.0 },
                             color: cosmic::iced::Color::WHITE,
                         },
@@ -1262,26 +1252,39 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
                 })),
         )
         .class(cosmic::theme::Button::Icon)
-        .padding(spacing.space_xxxs)
+        .padding(2)
         .on_press(Msg::Color(color))
     };
 
-    let arrow = |name: &'static str, message: Msg| {
-        button::custom(
-            icon::Icon::from(icon::from_name(name).size(48))
-                .width(Length::Fixed(24.0))
-                .height(Length::Fixed(24.0)),
-        )
-        .class(cosmic::theme::Button::Icon)
-        .padding(spacing.space_xxs)
-        .on_press(message)
-    };
-
-    let accent = cosmic::iced::Color::from(theme.accent_color());
-
-    let mut bar = row::with_capacity(20)
+    let mut bar = row::with_capacity(32)
         .align_y(Alignment::Center)
         .spacing(spacing.space_xxs);
+
+    // What to take, before what to draw on it.
+    let has_region = matches!(app.editor.tool, None) && matches!(&app.screenshot_args, Some(_));
+    let _ = has_region;
+    for (name, chosen, message) in [
+        (
+            "screenshot-selection-symbolic",
+            matches!(current_choice(app), Some(Choice::Rectangle(..))),
+            Msg::Choice(Choice::Rectangle(
+                app.prev_rectangle.unwrap_or_default(),
+                DragState::None,
+            )),
+        ),
+        (
+            "screenshot-window-symbolic",
+            matches!(current_choice(app), Some(Choice::Window(..))),
+            Msg::Choice(Choice::Window(output.name.clone(), None)),
+        ),
+        (
+            "screenshot-screen-symbolic",
+            matches!(current_choice(app), Some(Choice::Output(..))),
+            Msg::Choice(Choice::Output(output.name.clone())),
+        ),
+    ] {
+        bar = bar.push(round_button(name, chosen).on_press(message));
+    }
 
     for (tool, name) in [
         (Tool::Pencil, "tool-pencil-symbolic"),
@@ -1289,42 +1292,105 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
         (Tool::Arrow, "draw-arrow"),
         (Tool::Rectangle, "draw-rectangle-symbolic"),
         (Tool::Marker, "marker-symbolic"),
-        (Tool::Move, "object-select-symbolic"),
         (Tool::Text, "draw-text-symbolic"),
         (Tool::Counter, "list-add-symbolic"),
         (Tool::Blur, "image-filter-symbolic"),
         (Tool::Pixelate, "view-grid-symbolic"),
+        (Tool::Move, "object-select-symbolic"),
     ] {
         bar = bar.push(tool_button(tool, name));
     }
 
-    bar = bar.push(divider::vertical::light().height(Length::Fixed(28.0)));
+    bar = bar.push(
+        round_button("tool-measure-symbolic", app.editor.eyedropper).on_press(Msg::Eyedropper),
+    );
 
     for color in crate::editor::palette(accent) {
         bar = bar.push(swatch(color));
     }
 
     bar = bar
-        .push(divider::vertical::light().height(Length::Fixed(28.0)))
-        .push(
-            button::custom(
-                icon::Icon::from(icon::from_name("tool-measure-symbolic").size(48))
-                    .width(Length::Fixed(24.0))
-                    .height(Length::Fixed(24.0)),
-            )
-            .selected(app.editor.eyedropper)
-            .class(cosmic::theme::Button::Icon)
-            .padding(spacing.space_xxs)
-            .on_press(Msg::Eyedropper),
-        );
+        .push(round_button("edit-undo-symbolic", false).on_press(Msg::Undo))
+        .push(round_button("edit-redo-symbolic", false).on_press(Msg::Redo));
 
-    bar.push(divider::vertical::light().height(Length::Fixed(28.0)))
-        // The wheel changes it; the number says what it changed to.
-        .push(text::body(format!("{:.0}", app.editor.width)))
-        .push(divider::vertical::light().height(Length::Fixed(28.0)))
-        .push(arrow("edit-undo-symbolic", Msg::Undo))
-        .push(arrow("edit-redo-symbolic", Msg::Redo))
-        .into()
+    // Where it goes. Three buttons rather than a list to choose from: the reference has
+    // copy and save as buttons, and a list is one more click for the two things anyone
+    // does with a screenshot.
+    let ready =
+        !matches!(current_choice(app), Some(Choice::Rectangle(r, _)) if r.dimensions().is_none());
+
+    bar.push(
+        round_button("edit-copy-symbolic", false).on_press_maybe(
+            ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard)),
+        ),
+    )
+    .push(
+        round_button("document-save-symbolic", false)
+            .on_press_maybe(ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures))),
+    )
+    .push(
+        round_button("document-save-as-symbolic", false)
+            .on_press_maybe(ready.then_some(Msg::ChooseFolder)),
+    )
+    .push(round_button("window-close-symbolic", false).on_press(Msg::Cancel))
+    .into()
+}
+
+/// What the overlay is set to take right now.
+fn current_choice(app: &App) -> Option<&Choice> {
+    app.screenshot_args.as_ref().map(|args| &args.choice)
+}
+
+/// Diameter of a toolbar button, and of a colour swatch beside it.
+const BUTTON: f32 = 34.0;
+const SWATCH: f32 = 18.0;
+
+/// One round button: a filled circle with a white glyph, as the reference draws them. The
+/// chosen one is filled with the accent; the rest sit on a dark disc so that a light
+/// screenshot behind them cannot swallow the glyph.
+fn round_button(name: &'static str, chosen: bool) -> cosmic::widget::Button<'static, Msg> {
+    fn face(
+        theme: &cosmic::Theme,
+        background: cosmic::iced::Color,
+    ) -> cosmic::widget::button::Style {
+        let mut style = cosmic::widget::button::Style::new();
+        style.background = Some(background.into());
+        style.icon_color = Some(cosmic::iced::Color::WHITE);
+        style.text_color = Some(cosmic::iced::Color::WHITE);
+        style.border_radius = (BUTTON / 2.0).into();
+        let _ = theme;
+        style
+    }
+
+    let fill = move |theme: &cosmic::Theme, lighten: f32| {
+        let cosmic = theme.cosmic();
+        if chosen {
+            cosmic::iced::Color::from(cosmic.accent_color())
+        } else {
+            let base = cosmic::iced::Color::from(cosmic.background(false).base);
+            cosmic::iced::Color {
+                r: base.r + lighten,
+                g: base.g + lighten,
+                b: base.b + lighten,
+                a: 0.92,
+            }
+        }
+    };
+
+    cosmic::widget::button::custom(
+        cosmic::widget::icon::Icon::from(cosmic::widget::icon::from_name(name).size(48))
+            .width(Length::Fixed(18.0))
+            .height(Length::Fixed(18.0)),
+    )
+    .width(Length::Fixed(BUTTON))
+    .height(Length::Fixed(BUTTON))
+    .padding(0)
+    .class(cosmic::theme::Button::Custom {
+        active: Box::new(move |_focused, theme| face(theme, fill(theme, 0.0))),
+        disabled: Box::new(move |theme| face(theme, fill(theme, 0.0))),
+        hovered: Box::new(move |_focused, theme| face(theme, fill(theme, 0.10))),
+        pressed: Box::new(move |_focused, theme| face(theme, fill(theme, 0.16))),
+    })
 }
 
 /// Rebuild the frames the overlay shows, when blur or pixelation has changed them.
