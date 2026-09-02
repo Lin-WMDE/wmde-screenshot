@@ -71,6 +71,8 @@ pub struct Screenshot {
     pub location_options: Vec<String>,
     /// Last rectangle, so a second shot of the same place starts where the first ended.
     pub prev_rectangle: Option<screenshot::Rect>,
+    /// A request that arrived before the wayland side was up. See [`Screenshot::request`].
+    pending: Option<dbus::Request>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +88,8 @@ pub enum Message {
     Captured(Box<screenshot::Args>),
     /// The overlay changed something worth remembering.
     ConfigSet(config::Screenshot),
+    /// The outputs have had a moment to arrive; run whatever was held.
+    RunPending,
 }
 
 impl cosmic::Application for Screenshot {
@@ -117,6 +121,7 @@ impl cosmic::Application for Screenshot {
                 screenshot_args: None,
                 location_options: Vec::new(),
                 prev_rectangle: None,
+                pending: None,
             },
             dummy_surface(window::Id::unique()),
         )
@@ -125,6 +130,10 @@ impl cosmic::Application for Screenshot {
     fn update(&mut self, message: Message) -> cosmic::Task<cosmic::Action<Message>> {
         match message {
             Message::Request(request) => self.request(request),
+            Message::RunPending => match self.pending.take() {
+                Some(request) => self.request(request),
+                None => cosmic::Task::none(),
+            },
             Message::Captured(args) => {
                 if args.interactive {
                     screenshot::update_args(self, *args)
@@ -194,15 +203,17 @@ impl Screenshot {
             return cosmic::Task::none();
         }
 
-        let Some(wayland_helper) = self.wayland_helper.clone() else {
-            tracing::error!("{request:?}: no wayland connection yet");
-            return cosmic::Task::none();
-        };
-
-        if self.outputs.is_empty() {
-            tracing::error!("{request:?}: no outputs");
+        // The first request of a session arrives while D-Bus is still starting this
+        // process, which is before the toolkit has reported a single output. Holding it
+        // is the whole reason `pending` exists: dropping it would mean the first press of
+        // every session does nothing, and only the first.
+        if self.wayland_helper.is_none() || self.outputs.is_empty() {
+            tracing::info!("{request:?} held until the outputs arrive");
+            self.pending = Some(request);
             return cosmic::Task::none();
         }
+
+        let wayland_helper = self.wayland_helper.clone().unwrap();
 
         let outputs = self.outputs.clone();
         let config = self.config.screenshot.clone();
@@ -296,6 +307,17 @@ impl Screenshot {
                     .max(output.logical_pos.1 + output.logical_size.1 as i32);
             }
             self.prev_rectangle = Some(rect);
+        }
+
+        // Outputs are announced one at a time and nothing says "that was the last one",
+        // so a held request waits a moment more rather than shooting the first monitor
+        // that turns up and calling that the desktop. Several of these may be scheduled;
+        // only the first finds anything to take.
+        if self.pending.is_some() && self.wayland_helper.is_some() && !self.outputs.is_empty() {
+            return cosmic::Task::perform(
+                tokio::time::sleep(std::time::Duration::from_millis(200)),
+                |()| cosmic::action::app(Message::RunPending),
+            );
         }
 
         cosmic::Task::none()

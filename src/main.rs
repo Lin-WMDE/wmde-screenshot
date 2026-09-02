@@ -49,8 +49,14 @@ impl From<Command> for dbus::Request {
 }
 
 fn main() -> cosmic::iced::Result {
+    // Info by default: this program writes one line per screenshot, and a service whose
+    // journal is empty is one nobody can tell apart from a service that never ran.
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
         .init();
     log_panics::init();
     localize::localize();
