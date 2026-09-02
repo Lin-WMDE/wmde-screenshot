@@ -873,16 +873,27 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             // Only save config when drag is finished to avoid disk writes on every mouse motion
             let should_save_config =
                 !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
-            let last_rect = if let Choice::Rectangle(r, _) = &c {
-                app.prev_rectangle = Some(*r);
-                Some(config::Rect {
-                    left: r.left,
-                    top: r.top,
-                    right: r.right,
-                    bottom: r.bottom,
-                })
-            } else {
-                app.config.screenshot.last_rectangle
+            // A press without a drag leaves a rectangle a pixel or two across. Remembering
+            // it means the next Print opens on a selection nobody can see, and the way out
+            // is not obvious - so a rectangle too small to be meant is not remembered.
+            const WORTH_REMEMBERING: i32 = 8;
+            let last_rect = match &c {
+                Choice::Rectangle(r, _) => {
+                    app.prev_rectangle = Some(*r);
+                    if (r.right - r.left).abs() >= WORTH_REMEMBERING
+                        && (r.bottom - r.top).abs() >= WORTH_REMEMBERING
+                    {
+                        Some(config::Rect {
+                            left: r.left,
+                            top: r.top,
+                            right: r.right,
+                            bottom: r.bottom,
+                        })
+                    } else {
+                        app.config.screenshot.last_rectangle
+                    }
+                }
+                _ => app.config.screenshot.last_rectangle,
             };
 
             if let Some(args) = app.screenshot_args.as_mut() {
@@ -1305,7 +1316,8 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     }
 
     bar = bar.push(
-        round_button("wmde-shot-eyedropper-symbolic", app.editor.eyedropper).on_press(Msg::Eyedropper),
+        round_button("wmde-shot-eyedropper-symbolic", app.editor.eyedropper)
+            .on_press(Msg::Eyedropper),
     );
 
     for color in crate::editor::palette(accent) {
