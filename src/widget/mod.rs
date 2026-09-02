@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod keyboard_wrapper;
 pub mod output_arrangement;
 pub mod output_selection;

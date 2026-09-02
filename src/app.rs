@@ -73,6 +73,8 @@ pub struct Screenshot {
     pub prev_rectangle: Option<screenshot::Rect>,
     /// A request that arrived before the wayland side was up. See [`Screenshot::request`].
     pending: Option<dbus::Incoming>,
+    /// What has been drawn on the shot in hand. Cleared with every new overlay.
+    pub editor: crate::editor::Editor,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +124,7 @@ impl cosmic::Application for Screenshot {
                 location_options: Vec::new(),
                 prev_rectangle: None,
                 pending: None,
+                editor: crate::editor::Editor::default(),
             },
             dummy_surface(window::Id::unique()),
         )
@@ -202,7 +205,10 @@ impl Screenshot {
 
         if self.screenshot_args.is_some() {
             tracing::info!("{request:?} ignored: the overlay is already up");
-            dbus::answer(&incoming.reply, Err("a screenshot is already in progress".into()));
+            dbus::answer(
+                &incoming.reply,
+                Err("a screenshot is already in progress".into()),
+            );
             return cosmic::Task::none();
         }
 

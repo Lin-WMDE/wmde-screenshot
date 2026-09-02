@@ -39,6 +39,13 @@ build() {
   just build-release
 }
 
+check() {
+  cd "$srcdir/$pkgname"
+  # The dev profile on purpose: the release profile aborts on panic, and the test harness
+  # needs to unwind to report a failure.
+  cargo test --locked 2>&1 | tail -30
+}
+
 package() {
   cd "$srcdir/$pkgname"
   # installs /usr/bin/wmde-screenshot and the D-Bus activation file

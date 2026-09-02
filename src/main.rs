@@ -10,6 +10,7 @@ mod app;
 mod buffer;
 mod config;
 mod dbus;
+mod editor;
 mod localize;
 mod screenshot;
 mod wayland;

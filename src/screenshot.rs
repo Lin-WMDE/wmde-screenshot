@@ -364,6 +364,12 @@ fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingE
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// The pointer on the drawing layer.
+    Draw(crate::widget::annotations::Draw),
+    /// Pick a tool, or `None` to go back to moving the selection.
+    Tool(Option<crate::editor::Tool>),
+    Undo,
+    Redo,
     Capture,
     CaptureWithLocation(ImageSaveLocation),
     Cancel,
@@ -457,6 +463,20 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
             Msg::Location,
             theme.spacing,
             i as u128,
+            // The drawing layer. It answers to the pointer only while a tool is in hand;
+            // otherwise the press belongs to the selection underneath.
+            cosmic::Element::<crate::widget::annotations::Draw>::from(
+                cosmic::widget::canvas(crate::widget::annotations::Annotations {
+                    editor: &app.editor,
+                    origin: cosmic::iced::Vector::new(
+                        output.logical_pos.0 as f32,
+                        output.logical_pos.1 as f32,
+                    ),
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+            )
+            .map(Msg::Draw),
         ),
         |key, modifiers| {
             if modifiers.control() {
@@ -473,6 +493,12 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
                             return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
                         } else if value.eq_ignore_ascii_case("s") {
                             return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                        } else if value.eq_ignore_ascii_case("z") {
+                            return Some(if modifiers.shift() {
+                                Msg::Redo
+                            } else {
+                                Msg::Undo
+                            });
                         }
                     }
                     _ => {}
@@ -481,7 +507,17 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
 
             match key {
                 Key::Named(Named::Enter) => Some(Msg::Capture),
+                // Escape leaves the tool first and the overlay second: a person who
+                // picked the wrong tool should not lose the shot to say so.
                 Key::Named(Named::Escape) => Some(Msg::Cancel),
+                // One letter per tool, no modifier. The overlay has the keyboard to
+                // itself, and reaching for a modifier is a tax on every stroke.
+                Key::Character(ref value) => value
+                    .as_str()
+                    .chars()
+                    .next()
+                    .and_then(|c| crate::editor::Tool::from_key(c.to_ascii_lowercase()))
+                    .map(|tool| Msg::Tool(Some(tool))),
                 _ => None,
             }
         },
@@ -498,6 +534,7 @@ fn save(
     outputs: &[OutputState],
     args: Args,
     filename: &str,
+    objects: &[crate::editor::Object],
 ) -> Vec<cosmic::Task<cosmic::Action<Message>>> {
     let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = Vec::new();
     let outputs = outputs.to_vec();
@@ -519,7 +556,19 @@ fn save(
 
     match choice {
         Choice::Output(name) => {
-            if let Some(img) = images.remove(&name) {
+            if let Some(mut img) = images.remove(&name) {
+                if let Some(output) = outputs.iter().find(|o| o.name == name) {
+                    crate::editor::bake(
+                        &mut img.rgba,
+                        objects,
+                        Rect {
+                            left: output.logical_pos.0,
+                            top: output.logical_pos.1,
+                            right: output.logical_pos.0 + output.logical_size.0 as i32,
+                            bottom: output.logical_pos.1 + output.logical_size.1 as i32,
+                        },
+                    );
+                }
                 if let Ok(buffer) = Capturer::save_rgba(&img.rgba, image_path.as_deref())
                     .inspect_err(|err| {
                         tracing::error!("Failed to capture screenshot: {:?}", err);
@@ -556,7 +605,8 @@ fn save(
                         Some((raw_img.rgba, output_rect))
                     })
                     .collect::<Vec<_>>();
-                let img = combined_image(r, frames);
+                let mut img = combined_image(r, frames);
+                crate::editor::bake(&mut img, objects, r);
 
                 if let Ok(buffer) =
                     Capturer::save_rgba(&img, image_path.as_deref()).inspect_err(|err| {
@@ -570,6 +620,8 @@ fn save(
                 success = false;
             }
         }
+        // Marks are not baked into a window shot: the frame is the window's own surface,
+        // and the objects are in desktop coordinates with no rectangle to map them by.
         Choice::Window(output, Some(window_i)) => {
             if let Some(img) = args
                 .toplevel_images
@@ -616,6 +668,27 @@ fn save(
 
 pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Message>> {
     match msg {
+        Msg::Draw(draw) => {
+            use crate::widget::annotations::Draw;
+            match draw {
+                Draw::Press(at) => app.editor.press(at),
+                Draw::Drag(at) => app.editor.drag(at),
+                Draw::Release => app.editor.release(),
+            }
+            cosmic::Task::none()
+        }
+        Msg::Tool(tool) => {
+            app.editor.tool = tool;
+            cosmic::Task::none()
+        }
+        Msg::Undo => {
+            app.editor.undo();
+            cosmic::Task::none()
+        }
+        Msg::Redo => {
+            app.editor.redo();
+            cosmic::Task::none()
+        }
         Msg::Capture => {
             let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = app
                 .outputs
@@ -626,7 +699,14 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
                 tracing::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Task::batch(cmds);
             };
-            cmds.extend(save(&app.outputs, args, &app.config.screenshot.filename));
+            let objects: Vec<_> = app.editor.objects().cloned().collect();
+            cmds.extend(save(
+                &app.outputs,
+                args,
+                &app.config.screenshot.filename,
+                &objects,
+            ));
+            app.editor = crate::editor::Editor::default();
             cosmic::Task::batch(cmds)
         }
         Msg::CaptureWithLocation(location) => {
@@ -925,7 +1005,13 @@ pub async fn capture(
 /// Shoot without asking. Used by `full`, `screen` and `window`, where the request already
 /// says what to take.
 pub fn shoot(app: &App, args: Args) -> cosmic::Task<cosmic::Action<Message>> {
-    cosmic::Task::batch(save(&app.outputs, args, &app.config.screenshot.filename))
+    // Nothing was drawn: this path never put an overlay up for anyone to draw on.
+    cosmic::Task::batch(save(
+        &app.outputs,
+        args,
+        &app.config.screenshot.filename,
+        &[],
+    ))
 }
 
 /// The rectangle that covers every output.

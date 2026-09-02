@@ -19,6 +19,9 @@ png = "0.18"
 rustix = { version = "1.1", features = ["fs", "time"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tempfile = "3.27.0"
+# Draws the annotations into the saved image. Same version and feature set the toolkit's
+# software renderer uses, so the file and the preview come out of the same rasteriser.
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

@@ -32,6 +32,8 @@ pub struct ScreenshotSelection<'a, Msg> {
     pub choice_labels: Vec<Cow<'a, str>>,
     pub bg_element: Element<'a, Msg>,
     pub fg_element: Element<'a, Msg>,
+    /// What the person has drawn. Above the frame, below the toolbar.
+    pub draw_element: Element<'a, Msg>,
     pub menu_element: Element<'a, Msg>,
 }
 
@@ -76,6 +78,7 @@ where
         dropdown_selected: impl Fn(usize) -> Msg + 'static + Clone,
         spacing: Spacing,
         dnd_id: u128,
+        draw_element: Element<'a, Msg>,
     ) -> Self {
         let space_l = spacing.space_l;
         let space_s = spacing.space_s;
@@ -214,6 +217,7 @@ where
             choice_labels: Vec::new(),
             bg_element,
             fg_element,
+            draw_element,
             menu_element: cosmic::widget::container(
                 row![
                     row![
@@ -332,6 +336,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         vec![
             Tree::new(&self.bg_element),
             Tree::new(&self.fg_element),
+            Tree::new(&self.draw_element),
             Tree::new(&self.menu_element),
         ]
     }
@@ -340,6 +345,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         tree.diff_children(&mut [
             &mut self.bg_element,
             &mut self.fg_element,
+            &mut self.draw_element,
             &mut self.menu_element,
         ]);
     }
@@ -384,6 +390,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
+            &mut self.draw_element,
             &mut self.menu_element,
         ];
 
@@ -409,7 +416,12 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         viewport: &cosmic::iced::core::Rectangle,
         renderer: &cosmic::Renderer,
     ) -> cosmic::iced::core::mouse::Interaction {
-        let children = [&self.bg_element, &self.fg_element, &self.menu_element];
+        let children = [
+            &self.bg_element,
+            &self.fg_element,
+            &self.draw_element,
+            &self.menu_element,
+        ];
         let layout = layout.children().collect::<Vec<_>>();
         for (i, (layout, child)) in layout.into_iter().zip(children).enumerate().rev() {
             let tree = &state.children[i];
@@ -434,6 +446,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
+            &mut self.draw_element,
             &mut self.menu_element,
         ];
         for (i, (layout, child)) in layout.into_iter().zip(children).enumerate().rev() {
@@ -472,10 +485,14 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
             .fg_element
             .as_widget_mut()
             .layout(&mut children[1], renderer, limits);
+        let draw_node =
+            self.draw_element
+                .as_widget_mut()
+                .layout(&mut children[2], renderer, limits);
         let mut menu_node =
             self.menu_element
                 .as_widget_mut()
-                .layout(&mut children[2], renderer, limits);
+                .layout(&mut children[3], renderer, limits);
         let menu_bounds = menu_node.bounds();
         menu_node = menu_node.move_to(Point {
             x: (limits.max().width - menu_bounds.width) / 2.0,
@@ -484,7 +501,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
         layout::Node::with_children(
             limits.resolve(Length::Fill, Length::Fill, Size::ZERO),
-            vec![bg_node, fg_node, menu_node],
+            vec![bg_node, fg_node, draw_node, menu_node],
         )
     }
 
@@ -499,7 +516,12 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         viewport: &cosmic::iced::core::Rectangle,
     ) {
         use cosmic::iced::core::Renderer;
-        let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
+        let children = &[
+            &self.bg_element,
+            &self.fg_element,
+            &self.draw_element,
+            &self.menu_element,
+        ];
         let mut children = layout.children().zip(children).enumerate();
         {
             let (i, (layout, child)) = children.next().unwrap();
@@ -527,7 +549,12 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         renderer: &cosmic::Renderer,
         dnd_rectangles: &mut cosmic::iced::core::clipboard::DndDestinationRectangles,
     ) {
-        let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
+        let children = &[
+            &self.bg_element,
+            &self.fg_element,
+            &self.draw_element,
+            &self.menu_element,
+        ];
         for (i, (layout, child)) in layout.children().zip(children).enumerate() {
             let state = &state.children[i];
             child
