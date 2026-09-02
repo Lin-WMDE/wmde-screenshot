@@ -6,13 +6,46 @@ rust-version = "1.93"
 license = "GPL-3.0-only"
 
 [dependencies]
+anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
+dirs = "6.0.0"
 futures = "0.3"
+image = "0.25"
+jiff = "0.2"
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
-tokio = { version = "1.52.1", features = ["macros", "rt", "sync"] }
+memmap2 = "0.9.10"
+png = "0.18"
+rustix = { version = "1.1", features = ["fs", "time"] }
+serde = { version = "1.0.228", features = ["derive"] }
+tempfile = "3.27.0"
+tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+
+# Capture. Same pinned revision as wmde-portal: the two talk to the same compositor
+# protocols, and a split between them would be a bug that only shows at run time.
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
+wayland-client = "0.31.14"
+# Pulled in by the capture module as it stands. The dmabuf and cursor-stream halves of it
+# belong to screencast, not to a screenshot, and come out in a later pass.
+gbm = "0.18.0"
+wayland-protocols = "0.32.12"
+# Runtime-agnostic timer for the capture timeouts: the same code has to work under tokio
+# and under a plain block_on.
+async-io = "2"
+
+# Interface text. Ukrainian and English only - the stack has no Russian locale, and the
+# build gate in build-packages.sh fails if an i18n/ru* directory appears.
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = "8.11.0"
+
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+# The overlay draws each output's wallpaper behind the frames, so it reads the same state
+# the wmde-bg daemon writes. Renamed crate, hence the explicit package name.
+cosmic-bg-config = { package = "wmde-bg-config", path = "../wmde-bg/config" }
 
 # The window-less daemon shape, layer surfaces and the theme all come from here. Feature
 # set follows wmde-portal: the same runtime, the same renderer selection.

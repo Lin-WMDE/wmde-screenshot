@@ -7,7 +7,13 @@
 //! request over and exits. The key binding spawns the second, D-Bus starts the first.
 
 mod app;
+mod buffer;
+mod config;
 mod dbus;
+mod localize;
+mod screenshot;
+mod wayland;
+mod widget;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -47,6 +53,7 @@ fn main() -> cosmic::iced::Result {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     log_panics::init();
+    localize::localize();
 
     match Cli::parse().request {
         Some(command) => {

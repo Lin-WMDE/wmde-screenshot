@@ -2,17 +2,21 @@
 
 //! WMDE: the resident half - an iced application that owns no window until asked.
 
-use crate::dbus;
+use crate::wayland::WaylandHelper;
+use crate::{config, dbus, screenshot};
 use cosmic::app;
 use cosmic::cctk::sctk::shell::wlr_layer;
+use cosmic::iced::core::event::wayland::OutputEvent;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedMargin, IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced::{Length, Limits, Subscription, window};
+use cosmic::iced::{Length, Limits, Subscription, event, window};
 use cosmic::widget;
 use futures::SinkExt;
 use futures::channel::mpsc;
+use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::{Connection, Proxy};
 
 pub fn run() -> cosmic::iced::Result {
     // Two halves of the same decision. `no_main_window` because the program draws only
@@ -23,22 +27,64 @@ pub fn run() -> cosmic::iced::Result {
         .no_main_window(true)
         .exit_on_close(false);
 
-    cosmic::app::run::<Screenshot>(settings, ())
+    let (config, config_handler) = config::Config::load();
+
+    cosmic::app::run::<Screenshot>(settings, Flags { config, config_handler })
+}
+
+pub struct Flags {
+    pub config: config::Config,
+    pub config_handler: Option<cosmic::cosmic_config::Config>,
+}
+
+/// One output as the overlay needs to know it: where it sits in the layout, which surface
+/// covers it, and what is behind it.
+#[derive(Debug, Clone)]
+pub struct OutputState {
+    pub output: WlOutput,
+    pub id: window::Id,
+    pub name: String,
+    pub logical_size: (u32, u32),
+    pub logical_pos: (i32, i32),
+    pub has_pointer: bool,
+    pub bg_source: Option<cosmic_bg_config::Source>,
 }
 
 pub struct Screenshot {
-    core: app::Core,
+    pub core: app::Core,
+    pub config: config::Config,
+    config_handler: Option<cosmic::cosmic_config::Config>,
+    /// Every output the compositor has told us about, in no particular order.
+    pub outputs: Vec<OutputState>,
+    pub active_output: Option<WlOutput>,
+    /// Built from the first output event: the wayland connection the toolkit already has
+    /// is the one the capture goes through, so there is no second connection to keep.
+    pub wayland_helper: Option<WaylandHelper>,
+    /// Frames in hand and the current choice. `Some` exactly while the overlay is up.
+    pub screenshot_args: Option<screenshot::Args>,
+    pub location_options: Vec<String>,
+    /// Last rectangle, so a second shot of the same place starts where the first ended.
+    pub prev_rectangle: Option<screenshot::Rect>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Message {
     /// A request arrived on the bus.
     Request(dbus::Request),
+    /// The overlay talking to itself.
+    Screenshot(screenshot::Msg),
+    /// An output appeared, moved, resized or went away.
+    Output(OutputEvent, WlOutput),
+    /// Frames are in hand; put the overlay up. Boxed because `Args` carries whole images
+    /// and every other variant would have to be as large as this one.
+    Captured(Box<screenshot::Args>),
+    /// The overlay changed something worth remembering.
+    ConfigSet(config::Screenshot),
 }
 
 impl cosmic::Application for Screenshot {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = Flags;
     type Message = Message;
 
     const APP_ID: &'static str = dbus::DBUS_NAME;
@@ -51,18 +97,43 @@ impl cosmic::Application for Screenshot {
         &mut self.core
     }
 
-    fn init(mut core: app::Core, _flags: ()) -> (Self, cosmic::Task<cosmic::Action<Message>>) {
+    fn init(
+        mut core: app::Core,
+        flags: Flags,
+    ) -> (Self, cosmic::Task<cosmic::Action<Message>>) {
         core.set_app_type(cosmic::core::AppType::System);
 
-        (Self { core }, dummy_surface(window::Id::unique()))
+        (
+            Self {
+                core,
+                config: flags.config,
+                config_handler: flags.config_handler,
+                outputs: Vec::new(),
+                active_output: None,
+                wayland_helper: None,
+                screenshot_args: None,
+                location_options: Vec::new(),
+                prev_rectangle: None,
+            },
+            dummy_surface(window::Id::unique()),
+        )
     }
 
     fn update(&mut self, message: Message) -> cosmic::Task<cosmic::Action<Message>> {
         match message {
-            // Everything this program is for hangs off this arm; the capture and the
-            // editor land here in the stages after this one.
-            Message::Request(request) => {
-                tracing::info!("{request:?}: not built yet");
+            Message::Request(request) => self.request(request),
+            Message::Captured(args) => screenshot::update_args(self, *args),
+            Message::Screenshot(msg) => screenshot::update_msg(self, msg),
+            Message::Output(event, output) => self.output_event(event, output),
+            Message::ConfigSet(screenshot) => {
+                match &mut self.config_handler {
+                    Some(handler) => {
+                        if let Err(err) = self.config.set_screenshot(handler, screenshot) {
+                            tracing::error!("cannot save the screenshot settings: {err}");
+                        }
+                    }
+                    None => tracing::error!("cannot save the screenshot settings: no handler"),
+                }
                 cosmic::Task::none()
             }
         }
@@ -77,15 +148,145 @@ impl cosmic::Application for Screenshot {
             .into()
     }
 
-    fn view_window(&self, _id: window::Id) -> cosmic::Element<'_, Message> {
-        widget::Space::new()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+    fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Message> {
+        if self.outputs.iter().any(|output| output.id == id) {
+            screenshot::view(self, id).map(Message::Screenshot)
+        } else {
+            widget::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(bus)
+        Subscription::batch([
+            Subscription::run(bus),
+            // Output geometry is not asked for, it arrives: the toolkit reports every
+            // output as the compositor announces it, and the overlay needs all of them
+            // before it can cover the desktop.
+            event::listen_with(|event, _, _| match event {
+                cosmic::iced::Event::PlatformSpecific(
+                    event::PlatformSpecific::Wayland(event::wayland::Event::Output(
+                        output_event,
+                        output,
+                    )),
+                ) => Some(Message::Output(output_event, output)),
+                _ => None,
+            }),
+        ])
+    }
+}
+
+impl Screenshot {
+    /// Take the frames a request needs, then hand them to the overlay. Capture happens
+    /// before anything is drawn: the shot has to show the desktop as it was at the key
+    /// press, not the overlay that came up to ask about it.
+    fn request(&mut self, request: dbus::Request) -> cosmic::Task<cosmic::Action<Message>> {
+        if self.screenshot_args.is_some() {
+            tracing::info!("{request:?} ignored: the overlay is already up");
+            return cosmic::Task::none();
+        }
+
+        let Some(wayland_helper) = self.wayland_helper.clone() else {
+            tracing::error!("{request:?}: no wayland connection yet");
+            return cosmic::Task::none();
+        };
+
+        if self.outputs.is_empty() {
+            tracing::error!("{request:?}: no outputs");
+            return cosmic::Task::none();
+        }
+
+        let outputs = self.outputs.clone();
+        let config = self.config.screenshot.clone();
+        let active = self.active_output.clone();
+
+        cosmic::Task::perform(
+            screenshot::capture(wayland_helper, outputs, config, active, request),
+            |args| match args {
+                Some(args) => cosmic::action::app(Message::Captured(Box::new(args))),
+                None => cosmic::action::none(),
+            },
+        )
+    }
+
+    fn output_event(
+        &mut self,
+        event: OutputEvent,
+        output: WlOutput,
+    ) -> cosmic::Task<cosmic::Action<Message>> {
+        // The first output event is also where the wayland connection comes from: the
+        // toolkit already has one open, and opening a second would mean a second event
+        // loop watching the same compositor.
+        if self.wayland_helper.is_none()
+            && let Some(backend) = output.backend().upgrade()
+        {
+            self.wayland_helper = Some(WaylandHelper::new(Connection::from_backend(backend)));
+        }
+
+        match event {
+            OutputEvent::Created(Some(info))
+                if info.name.is_some()
+                    && info.logical_size.is_some()
+                    && info.logical_position.is_some() =>
+            {
+                self.outputs.push(OutputState {
+                    output,
+                    id: window::Id::unique(),
+                    name: info.name.unwrap(),
+                    logical_size: info.logical_size.map(|(w, h)| (w as u32, h as u32)).unwrap(),
+                    logical_pos: info.logical_position.unwrap(),
+                    has_pointer: false,
+                    bg_source: None,
+                });
+            }
+            OutputEvent::Removed => self.outputs.retain(|o| o.output != output),
+            OutputEvent::InfoUpdate(info)
+                if info.name.is_some()
+                    && info.logical_size.is_some()
+                    && info.logical_position.is_some() =>
+            {
+                let size = info.logical_size.map(|(w, h)| (w as u32, h as u32)).unwrap();
+                let pos = info.logical_position.unwrap();
+                let name = info.name.unwrap();
+                if let Some(state) = self.outputs.iter_mut().find(|o| o.output == output) {
+                    state.name = name;
+                    state.logical_size = size;
+                    state.logical_pos = pos;
+                } else {
+                    self.outputs.push(OutputState {
+                        output,
+                        id: window::Id::unique(),
+                        name,
+                        logical_size: size,
+                        logical_pos: pos,
+                        has_pointer: false,
+                        bg_source: None,
+                    });
+                }
+            }
+            other => tracing::debug!("unhandled output event: {other:?}"),
+        }
+
+        // Default selection is the whole desktop, so the first shot after a login has a
+        // rectangle to start from rather than a zero-sized one.
+        if self.prev_rectangle.is_none() && !self.outputs.is_empty() {
+            let mut rect = screenshot::Rect::default();
+            for output in &self.outputs {
+                rect.left = rect.left.min(output.logical_pos.0);
+                rect.top = rect.top.min(output.logical_pos.1);
+                rect.right = rect
+                    .right
+                    .max(output.logical_pos.0 + output.logical_size.0 as i32);
+                rect.bottom = rect
+                    .bottom
+                    .max(output.logical_pos.1 + output.logical_size.1 as i32);
+            }
+            self.prev_rectangle = Some(rect);
+        }
+
+        cosmic::Task::none()
     }
 }
 
