@@ -6,7 +6,6 @@ save-to = Save to
     .documents = { save-to } Documents
 
 saved = Screenshot saved
-copied = Screenshot copied
 failed = Screenshot failed
 
 choose-folder = Choose folder

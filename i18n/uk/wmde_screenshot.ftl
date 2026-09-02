@@ -6,7 +6,6 @@ save-to = Зберегти в
     .documents = { save-to } «Документи»
 
 saved = Знімок збережено
-copied = Знімок скопійовано
 failed = Не вдалося зробити знімок
 
 choose-folder = Обрати теку

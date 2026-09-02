@@ -1187,9 +1187,12 @@ fn announce(success: bool, path: Option<&Path>) {
             tracing::info!("screenshot saved to {}", path.display());
             (fl!("saved"), path.display().to_string())
         }
+        // Nothing to say. The notification exists to answer two questions - where the
+        // file went, and whether it failed - and the clipboard answers the first one by
+        // itself at the next paste. Three instant keys that each throw a toast are noise.
         (true, None) => {
             tracing::info!("screenshot copied to the clipboard");
-            (fl!("copied"), String::new())
+            return;
         }
         (false, _) => {
             tracing::error!("screenshot failed");
