@@ -39,3 +39,5 @@ check-json: (check '--message-format=json')
 install:
     install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{bin-dst}}
     sed 's|@bindir@|{{bindir}}|' data/dbus-1/{{appid}}.service.in | install -Dm0644 /dev/stdin {{ data-dir / 'dbus-1' / 'services' / (appid + '.service') }}
+    install -Dm0644 data/applications/{{appid}}.desktop {{ data-dir / 'applications' / (appid + '.desktop') }}
+    install -Dm0644 data/component-settings/{{appid}}.ron {{ data-dir / 'wmde' / 'component-settings' / (appid + '.ron') }}

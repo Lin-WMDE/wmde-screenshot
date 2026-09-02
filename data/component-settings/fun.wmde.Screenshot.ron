@@ -1,0 +1,39 @@
+// WMDE component settings schema. See .doc/settings/08-applet-schemas.md.
+//
+// Only the two keys a person sets. The rest of the config - which mode the overlay opens
+// on, and the rectangle it opens with - is what the last shot left behind, not a setting.
+(
+    schema: 1,
+    config: (id: "fun.wmde.Screenshot", version: 1),
+    groups: [
+        (
+            title: { "": "Saving", "uk": "Збереження" },
+            rows: [
+                Setting(
+                    key: "save_location",
+                    label: { "": "Where shots go", "uk": "Куди йдуть знімки" },
+                    description: {
+                        "": "The overlay can pick a different place for one shot without changing this.",
+                        "uk": "Накладка може обрати інше місце для одного знімка, не змінюючи цього.",
+                    },
+                    control: Choice(items: [
+                        (value: "Clipboard", label: { "": "Clipboard",  "uk": "Буфер обміну" }),
+                        (value: "Pictures",  label: { "": "Pictures",   "uk": "«Зображення»" }),
+                        (value: "Documents", label: { "": "Documents",  "uk": "«Документи»" }),
+                    ]),
+                    default: "Pictures",
+                ),
+                Setting(
+                    key: "filename",
+                    label: { "": "File name", "uk": "Назва файла" },
+                    description: {
+                        "": "A strftime pattern in local time. The extension is part of it, and changing it renames a PNG rather than converting one.",
+                        "uk": "Взірець strftime за місцевим часом. Розширення - його частина, і зміна лише перейменує PNG, а не перетворить його.",
+                    },
+                    control: Text(max_len: 128),
+                    default: "\"Screenshot_%Y-%m-%d_%H-%M-%S.png\"",
+                ),
+            ],
+        ),
+    ],
+)

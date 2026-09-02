@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Screenshot
+Name[uk]=Знімок екрана
+Comment=Take a picture of the screen and mark it up
+Comment[uk]=Зробити знімок екрана та позначити на ньому
+Exec=wmde-screenshot gui
+Icon=applets-screenshooter
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=screenshot;capture;snip;
+Keywords[uk]=знімок;екран;скріншот;
+StartupNotify=true
