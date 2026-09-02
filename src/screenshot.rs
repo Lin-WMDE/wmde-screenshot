@@ -153,6 +153,10 @@ impl Capturer {
         self.wayland_helper.output_toplevel_rects(output)
     }
 
+    fn active_output(&self) -> Option<WlOutput> {
+        self.wayland_helper.active_output()
+    }
+
     async fn interactive_toplevel_images(
         &self,
         outputs: &[Output],
@@ -400,17 +404,6 @@ pub enum Choice {
     Output(String),
     Rectangle(Rect, DragState),
     Window(String, Option<usize>),
-}
-
-impl From<&Choice> for config::Choice {
-    // Using a reference here to avoid requiring a temporary `Choice` that's only consumed
-    fn from(value: &Choice) -> Self {
-        match value {
-            Choice::Window(..) => config::Choice::Window,
-            Choice::Rectangle(..) => config::Choice::Rectangle,
-            Choice::Output(output) => config::Choice::Output(Some(output.clone())),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -881,7 +874,6 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             cosmic::Task::batch(cmds)
         }
         Msg::Choice(c) => {
-            let choice = (&c).into();
             // Only save config when drag is finished to avoid disk writes on every mouse motion
             let should_save_config =
                 !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
@@ -904,7 +896,6 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             }
             if should_save_config {
                 cosmic::task::message(Message::ConfigSet(config::Screenshot {
-                    choice,
                     last_rectangle: last_rect,
                     ..app.config.screenshot.clone()
                 }))
@@ -1068,6 +1059,9 @@ pub async fn capture(
     incoming: crate::dbus::Incoming,
 ) -> Option<Args> {
     let request = incoming.request;
+    // The compositor knows which window has focus, and that is a better answer than
+    // whatever the toolkit last reported as the surface under the pointer.
+    let active = wayland_helper.active_output().or(active);
     // Asked before the value moves into `Args`: someone waiting for the file is what makes
     // this a temporary one.
     let to_temp = incoming.reply.lock().unwrap().is_some();
@@ -1117,31 +1111,21 @@ pub async fn capture(
             let index = capturer.active_toplevel_index(&output.output)?;
             Choice::Window(name, Some(index))
         }
-        Request::Gui => match &config.choice {
-            config::Choice::Output(Some(name)) if outputs.iter().any(|o| &o.name == name) => {
-                Choice::Output(name.clone())
-            }
-            config::Choice::Output(_) => {
-                Choice::Output(active_name.clone().unwrap_or_else(|| first.name.clone()))
-            }
-            // No index: the overlay opens on the window picker and the person chooses.
-            config::Choice::Window => Choice::Window(
-                active_name.clone().unwrap_or_else(|| first.name.clone()),
-                None,
-            ),
-            config::Choice::Rectangle => Choice::Rectangle(
-                config
-                    .last_rectangle
-                    .map(|r| Rect {
-                        left: r.left,
-                        top: r.top,
-                        right: r.right,
-                        bottom: r.bottom,
-                    })
-                    .unwrap_or_else(|| desktop_rect(&outputs)),
-                DragState::None,
-            ),
-        },
+        // The overlay always opens on a region. The mode buttons are right there for the
+        // other two, and a key that sometimes opens a window picker instead of a selection
+        // is a key nobody can press without looking.
+        Request::Gui => Choice::Rectangle(
+            config
+                .last_rectangle
+                .map(|r| Rect {
+                    left: r.left,
+                    top: r.top,
+                    right: r.right,
+                    bottom: r.bottom,
+                })
+                .unwrap_or_else(|| desktop_rect(&outputs)),
+            DragState::None,
+        ),
     };
 
     let toplevel_rects = outputs
@@ -1155,7 +1139,12 @@ pub async fn capture(
         preview: None,
         toplevel_images,
         choice,
-        location: config.save_location,
+        // An instant key puts the picture where it can be pasted. Choosing a folder is
+        // what the overlay is for, and these three never show one.
+        location: match request {
+            Request::Gui => config.save_location,
+            _ => ImageSaveLocation::Clipboard,
+        },
         interactive: matches!(request, Request::Gui),
         to_temp,
         reply: incoming.reply,

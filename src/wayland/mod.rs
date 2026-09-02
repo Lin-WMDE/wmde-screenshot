@@ -361,6 +361,19 @@ impl WaylandHelper {
         }
     }
 
+    /// The output the focused window is on. That is what a person means by "this monitor"
+    /// - not the one the pointer happens to rest on, which may be neither.
+    pub fn active_output(&self) -> Option<wl_output::WlOutput> {
+        let toplevels = self.inner.toplevels.lock().unwrap();
+        toplevels
+            .iter()
+            .find(|info| {
+                info.state
+                    .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+            })
+            .and_then(|info| info.output.iter().next().cloned())
+    }
+
     /// Where each window on this output sits on the desktop, in the same order as the
     /// frames `capture_output_toplevels_shm` yields. Marks drawn over a window shot need
     /// it: without a rectangle there is nothing to map desktop coordinates onto.
