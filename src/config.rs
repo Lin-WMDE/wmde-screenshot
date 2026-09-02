@@ -55,6 +55,22 @@ pub struct Screenshot {
     /// only rename a PNG.
     #[serde(default = "default_filename")]
     pub filename: String,
+    /// How much black lies over everything outside the selection, as a percentage.
+    ///
+    /// This is the strength of the dimming, not the brightness that survives it: at 67 the
+    /// desktop outside keeps a third of what it had. 0 leaves the screen untouched, 100
+    /// paints it solid black.
+    #[serde(default = "default_dim")]
+    pub dim: u8,
+}
+
+/// The value the schema ships as its default. The two are written in different files and
+/// have to agree: the schema is what a fresh machine reads, this is what a config written by
+/// an older build falls back to.
+pub const DEFAULT_DIM: u8 = 67;
+
+fn default_dim() -> u8 {
+    DEFAULT_DIM
 }
 
 fn default_filename() -> String {
@@ -66,6 +82,7 @@ impl Default for Screenshot {
         Self {
             save_location: ImageSaveLocation::default(),
             filename: default_filename(),
+            dim: DEFAULT_DIM,
         }
     }
 }

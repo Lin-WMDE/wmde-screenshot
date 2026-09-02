@@ -72,6 +72,8 @@ where
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         spacing: Spacing,
         dnd_id: u128,
+        // Alpha of the black outside the selection, out of the settings.
+        dim: f32,
         draw_element: Element<'a, Msg>,
         // The drawing half of the toolbar. Built by the caller, which is where the tool,
         // the colour and the width live.
@@ -91,6 +93,7 @@ where
             Choice::Rectangle(r, drag_state) => RectangleSelection::new(
                 output_rect,
                 r,
+                dim,
                 drag_state,
                 window_id,
                 dnd_id,

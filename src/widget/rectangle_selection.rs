@@ -13,15 +13,6 @@ use cosmic::widget::{self, Widget};
 
 use crate::screenshot::Rect;
 
-/// Alpha of the black laid over everything outside the selection.
-///
-/// This is the alpha, NOT the brightness that survives it: everything outside keeps
-/// `1.0 - DIM` of what it had. At 0.67 that is a third, which is the figure to reason in when
-/// someone asks for "a third" - the two read the same aloud and mean the opposite.
-///
-/// `ref/flameshot.jpg` measures between 0.36 and 0.54 of alpha; this is deliberately darker
-/// than the reference.
-const DIM: f32 = 0.67;
 
 pub const MIME: &str = "X-WMDE-SCREENSHOT-MyData";
 pub struct MyData;
@@ -86,6 +77,8 @@ const CORNER_DIAMETER: f32 = 16.0;
 pub struct RectangleSelection<Msg> {
     output_rect: Rect,
     rectangle_selection: Rect,
+    /// Alpha of the black outside the selection, from the settings.
+    dim: f32,
     window_id: iced::core::window::Id,
     on_rectangle: Box<dyn Fn(DragState, Rect) -> Msg>,
     drag_state: DragState,
@@ -97,6 +90,7 @@ impl<Msg> RectangleSelection<Msg> {
     pub fn new(
         output_rect: Rect,
         rectangle_selection: Rect,
+        dim: f32,
         drag_direction: DragState,
         window_id: iced::core::window::Id,
         drag_id: u128,
@@ -106,6 +100,7 @@ impl<Msg> RectangleSelection<Msg> {
             on_rectangle: Box::new(on_rectangle),
             drag_state: drag_direction,
             rectangle_selection,
+            dim,
             output_rect,
             window_id,
             drag_id,
@@ -499,7 +494,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
         let dim_whole = |renderer: &mut cosmic::Renderer| {
             let mut overlay = Color::BLACK;
-            overlay.a = DIM;
+            overlay.a = self.dim;
             renderer.fill_quad(
                 Quad {
                     bounds: Rectangle::new(Point::ORIGIN, outer_size),
@@ -533,7 +528,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         // Vulkan driver and the one without. Quads are snapped so the seam against the
         // selection edge does not leave a hairline.
         let mut overlay = Color::BLACK;
-        overlay.a = DIM;
+        overlay.a = self.dim;
 
         let inner = Rectangle::new(
             Point::new(

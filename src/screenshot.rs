@@ -479,6 +479,9 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
             Msg::WindowChosen,
             theme.spacing,
             i as u128,
+            // Percent in the settings, alpha here. Clamped because the config is a file a
+            // person can edit by hand.
+            f32::from(app.config.screenshot.dim.min(100)) / 100.0,
             // The drawing layer. It answers to the pointer only while a tool is in hand;
             // otherwise the press belongs to the selection underneath.
             cosmic::Element::<crate::widget::annotations::Draw>::from(
