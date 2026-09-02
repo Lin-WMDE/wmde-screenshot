@@ -46,7 +46,7 @@
                         "": "How much black lies over everything outside the selection. 0 leaves the screen untouched, 100 paints it solid black. This is the strength of the dimming, not the brightness left over.",
                         "uk": "Скільки чорного лягає на все поза виділенням. 0 - екран не темніє зовсім, 100 - суцільна чорнота. Це сила затемнення, а не залишкова яскравість.",
                     },
-                    control: Number(min: 0, max: 100, step: 1, suffix: " %"),
+                    control: Number(min: 0, max: 100, step: 1, suffix: { "": " %" }),
                     default: "67",
                 ),
             ],
