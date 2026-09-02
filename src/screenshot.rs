@@ -1183,6 +1183,7 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
         (Tool::Arrow, "draw-arrow"),
         (Tool::Rectangle, "draw-rectangle-symbolic"),
         (Tool::Marker, "marker-symbolic"),
+        (Tool::Move, "object-select-symbolic"),
         (Tool::Text, "draw-text-symbolic"),
         (Tool::Counter, "list-add-symbolic"),
         (Tool::Blur, "image-filter-symbolic"),

@@ -17,6 +17,8 @@ pub enum Tool {
     Arrow,
     Rectangle,
     Marker,
+    /// Picks up something already drawn and moves it.
+    Move,
     /// Types a line of text where it is put.
     Text,
     /// Drops a numbered circle, one higher each time.
@@ -38,6 +40,7 @@ impl Tool {
             Self::Arrow => 'a',
             Self::Rectangle => 'r',
             Self::Marker => 'm',
+            Self::Move => 'v',
             Self::Text => 't',
             Self::Counter => 'c',
             Self::Blur => 'b',
@@ -52,6 +55,7 @@ impl Tool {
             Self::Arrow,
             Self::Rectangle,
             Self::Marker,
+            Self::Move,
             Self::Text,
             Self::Counter,
             Self::Blur,
@@ -130,6 +134,116 @@ impl Object {
     pub const fn is_raster(&self) -> bool {
         matches!(self, Self::Blur { .. } | Self::Pixelate { .. })
     }
+
+    /// The box this object occupies, for hit testing and for the outline that marks it as
+    /// picked up. Text is estimated rather than measured: measuring means shaping the
+    /// line, and this is asked on every pointer move.
+    pub fn bounds(&self) -> (Point, Point) {
+        let pair = |a: Point, b: Point| {
+            (
+                Point::new(a.x.min(b.x), a.y.min(b.y)),
+                Point::new(a.x.max(b.x), a.y.max(b.y)),
+            )
+        };
+
+        match self {
+            Self::Path { points, stroke } => {
+                let mut min = Point::new(f32::MAX, f32::MAX);
+                let mut max = Point::new(f32::MIN, f32::MIN);
+                for point in points {
+                    min = Point::new(min.x.min(point.x), min.y.min(point.y));
+                    max = Point::new(max.x.max(point.x), max.y.max(point.y));
+                }
+                let pad = stroke.width / 2.0;
+                (
+                    Point::new(min.x - pad, min.y - pad),
+                    Point::new(max.x + pad, max.y + pad),
+                )
+            }
+            Self::Line { from, to, .. }
+            | Self::Arrow { from, to, .. }
+            | Self::Rectangle { from, to, .. }
+            | Self::Blur { from, to, .. }
+            | Self::Pixelate { from, to, .. } => pair(*from, *to),
+            Self::Text {
+                at,
+                content,
+                stroke,
+            } => {
+                let size = stroke.width * 6.0;
+                (
+                    *at,
+                    Point::new(
+                        at.x + content.chars().count() as f32 * size * 0.6,
+                        at.y + size,
+                    ),
+                )
+            }
+            Self::Counter { at, stroke, .. } => {
+                let radius = stroke.width * 3.5;
+                (
+                    Point::new(at.x - radius, at.y - radius),
+                    Point::new(at.x + radius, at.y + radius),
+                )
+            }
+        }
+    }
+
+    /// Whether the point is close enough to count as a press on this object. Strokes are
+    /// measured to the line itself so that a diagonal arrow does not claim the whole box
+    /// it happens to span; everything else is claimed by its box.
+    pub fn hit(&self, point: Point, tolerance: f32) -> bool {
+        match self {
+            Self::Path { points, stroke } => {
+                let near = tolerance.max(stroke.width);
+                points
+                    .windows(2)
+                    .any(|pair| distance_to_segment(point, pair[0], pair[1]) <= near)
+            }
+            Self::Line { from, to, stroke } | Self::Arrow { from, to, stroke } => {
+                distance_to_segment(point, *from, *to) <= tolerance.max(stroke.width)
+            }
+            _ => {
+                let (min, max) = self.bounds();
+                point.x >= min.x - tolerance
+                    && point.x <= max.x + tolerance
+                    && point.y >= min.y - tolerance
+                    && point.y <= max.y + tolerance
+            }
+        }
+    }
+
+    /// Move it. Every point it is made of moves by the same amount.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        let shift = |p: &mut Point| {
+            p.x += dx;
+            p.y += dy;
+        };
+        match self {
+            Self::Path { points, .. } => points.iter_mut().for_each(shift),
+            Self::Line { from, to, .. }
+            | Self::Arrow { from, to, .. }
+            | Self::Rectangle { from, to, .. }
+            | Self::Blur { from, to, .. }
+            | Self::Pixelate { from, to, .. } => {
+                shift(from);
+                shift(to);
+            }
+            Self::Text { at, .. } | Self::Counter { at, .. } => shift(at),
+        }
+    }
+}
+
+/// How far the point is from the segment, which is what "did they press the line" means
+/// for anything drawn as a stroke.
+fn distance_to_segment(point: Point, from: Point, to: Point) -> f32 {
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let length_squared = dx * dx + dy * dy;
+    if length_squared <= f32::EPSILON {
+        return point.distance(from);
+    }
+    let t = (((point.x - from.x) * dx + (point.y - from.y) * dy) / length_squared).clamp(0.0, 1.0);
+    point.distance(Point::new(from.x + t * dx, from.y + t * dy))
 }
 
 /// The drawing half of the overlay.
@@ -149,6 +263,10 @@ pub struct Editor {
     editing: Option<usize>,
     /// What the next counter will say.
     next_number: u32,
+    /// Index of the object the move tool has hold of.
+    selected: Option<usize>,
+    /// Where the pointer was when it last moved that object.
+    grab: Option<Point>,
 }
 
 impl Default for Editor {
@@ -163,6 +281,8 @@ impl Default for Editor {
             drawing: None,
             editing: None,
             next_number: 1,
+            selected: None,
+            grab: None,
         }
     }
 }
@@ -196,6 +316,17 @@ impl Editor {
         // Whatever is placed next ends the typing, which keeps the text being edited the
         // last object in the list - the caret is drawn on that basis.
         self.finish_text();
+
+        if tool == Tool::Move {
+            // Topmost first: the last drawn is the one on top, and that is the one a
+            // person means when marks overlap.
+            self.selected = self
+                .objects
+                .iter()
+                .rposition(|object| object.hit(at, self.width.max(6.0)));
+            self.grab = self.selected.map(|_| at);
+            return;
+        }
         let stroke = tool.stroke(self.width, self.color);
 
         self.drawing = Some(match tool {
@@ -249,10 +380,22 @@ impl Editor {
                 self.undone.clear();
                 return;
             }
+            // Handled above: it picks something up instead of making something new.
+            Tool::Move => return,
         });
     }
 
     pub fn drag(&mut self, at: Point) {
+        if self.tool == Some(Tool::Move) {
+            if let (Some(index), Some(from)) = (self.selected, self.grab)
+                && let Some(object) = self.objects.get_mut(index)
+            {
+                object.translate(at.x - from.x, at.y - from.y);
+                self.grab = Some(at);
+            }
+            return;
+        }
+
         match &mut self.drawing {
             // Points closer together than this add nothing but memory: the stroke is
             // several pixels wide and a freehand line collects hundreds of events.
@@ -276,6 +419,9 @@ impl Editor {
     /// Finish the object in hand. A click that never moved leaves nothing behind - an
     /// empty line is not a mark, it is a missed press.
     pub fn release(&mut self) {
+        // The move tool holds nothing of its own; letting go just stops the dragging.
+        self.grab = None;
+
         let Some(object) = self.drawing.take() else {
             return;
         };
@@ -316,6 +462,11 @@ impl Editor {
     /// on screen has to be rebuilt from the pristine one every time the list changes.
     pub fn has_raster(&self) -> bool {
         self.objects.iter().any(Object::is_raster)
+    }
+
+    /// The object the move tool has hold of, for the outline that says which one it is.
+    pub fn selected(&self) -> Option<&Object> {
+        self.selected.and_then(|index| self.objects.get(index))
     }
 
     /// Whether a text is being typed into. The keyboard goes there before it goes to the
@@ -720,6 +871,46 @@ mod tests {
             before_outside,
             "the blur reached outside its rectangle"
         );
+    }
+
+    #[test]
+    fn the_move_tool_picks_the_topmost_mark_and_carries_it() {
+        let mut editor = editor_with(Tool::Line);
+        editor.press(Point::new(0.0, 0.0));
+        editor.drag(Point::new(100.0, 0.0));
+        editor.release();
+
+        // A second line right on top of the first.
+        editor.press(Point::new(0.0, 2.0));
+        editor.drag(Point::new(100.0, 2.0));
+        editor.release();
+
+        editor.tool = Some(Tool::Move);
+        editor.press(Point::new(50.0, 1.0));
+        assert!(editor.selected().is_some(), "nothing was picked up");
+
+        editor.drag(Point::new(50.0, 41.0));
+        editor.release();
+
+        // The one on top is the one that moved, and it moved by what the pointer did.
+        let (min, _) = editor.selected().expect("the mark was dropped").bounds();
+        assert!(
+            (min.y - 42.0).abs() < 1.0,
+            "the topmost mark is at y={}, not 42",
+            min.y
+        );
+    }
+
+    #[test]
+    fn a_press_away_from_every_mark_picks_up_nothing() {
+        let mut editor = editor_with(Tool::Line);
+        editor.press(Point::new(0.0, 0.0));
+        editor.drag(Point::new(100.0, 0.0));
+        editor.release();
+
+        editor.tool = Some(Tool::Move);
+        editor.press(Point::new(50.0, 400.0));
+        assert!(editor.selected().is_none());
     }
 
     #[test]

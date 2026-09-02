@@ -175,6 +175,16 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
             }
         }
 
+        // What the move tool has hold of, outlined so that it is clear which mark will
+        // move. Drawn last so it sits over everything, including the mark itself.
+        if let Some(object) = self.editor.selected() {
+            let (min, max) = object.bounds();
+            let path = Path::new(|builder| {
+                builder.rectangle(min, Size::new(max.x - min.x, max.y - min.y));
+            });
+            frame.stroke(&path, pen(1.0, cosmic::iced::Color::WHITE));
+        }
+
         vec![frame.into_geometry()]
     }
 
