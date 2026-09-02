@@ -16,12 +16,12 @@ use crate::screenshot::Rect;
 /// Alpha of the black laid over everything outside the selection.
 ///
 /// This is the alpha, NOT the brightness that survives it: everything outside keeps
-/// `1.0 - DIM` of what it had. At 0.75 that is a quarter, which is the figure to reason in
-/// when someone asks for "a quarter" - the two read the same aloud and mean the opposite.
+/// `1.0 - DIM` of what it had. At 0.67 that is a third, which is the figure to reason in when
+/// someone asks for "a third" - the two read the same aloud and mean the opposite.
 ///
 /// `ref/flameshot.jpg` measures between 0.36 and 0.54 of alpha; this is deliberately darker
 /// than the reference.
-const DIM: f32 = 0.75;
+const DIM: f32 = 0.67;
 
 pub const MIME: &str = "X-WMDE-SCREENSHOT-MyData";
 pub struct MyData;
