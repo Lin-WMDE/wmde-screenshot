@@ -68,6 +68,9 @@ features = [
     "wayland",
     "wgpu",
     "winit",
+    # The save dialog. Without it `cosmic::dialog` does not exist at all: the module is
+    # behind a cfg alias that this feature sets.
+    "xdg-portal",
 ]
 
 # Build libcosmic and iced from the local WMDE fork, so the rebranded config root and the

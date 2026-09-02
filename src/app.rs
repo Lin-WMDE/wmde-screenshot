@@ -73,6 +73,9 @@ pub struct Screenshot {
     pub prev_rectangle: Option<screenshot::Rect>,
     /// A request that arrived before the wayland side was up. See [`Screenshot::request`].
     pending: Option<dbus::Incoming>,
+    /// Frames held while a file dialog is open: the overlay is gone by then, and the shot
+    /// still has to be somewhere.
+    pub pending_save: Option<screenshot::Args>,
     /// What has been drawn on the shot in hand. Cleared with every new overlay.
     pub editor: crate::editor::Editor,
 }
@@ -124,6 +127,7 @@ impl cosmic::Application for Screenshot {
                 location_options: Vec::new(),
                 prev_rectangle: None,
                 pending: None,
+                pending_save: None,
                 editor: crate::editor::Editor::default(),
             },
             dummy_surface(window::Id::unique()),

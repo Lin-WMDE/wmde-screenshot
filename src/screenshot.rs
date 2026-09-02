@@ -371,6 +371,12 @@ pub enum Msg {
     Color(cosmic::iced::Color),
     Undo,
     Redo,
+    /// Turn the pointer readout on or off.
+    Eyedropper,
+    /// Take the shot down and ask where to put it.
+    ChooseFolder,
+    /// The person picked a file. `None` means they changed their mind.
+    SaveTo(Option<PathBuf>),
     /// A character typed into the text being edited.
     Type(char),
     Backspace,
@@ -481,6 +487,7 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
             cosmic::Element::<crate::widget::annotations::Draw>::from(
                 cosmic::widget::canvas(crate::widget::annotations::Annotations {
                     editor: &app.editor,
+                    frame: Some(&img.rgba),
                     origin: cosmic::iced::Vector::new(
                         output.logical_pos.0 as f32,
                         output.logical_pos.1 as f32,
@@ -537,12 +544,13 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
                 Key::Named(Named::Escape) => Some(Msg::Cancel),
                 // One letter per tool, no modifier. The overlay has the keyboard to
                 // itself, and reaching for a modifier is a tax on every stroke.
-                Key::Character(ref value) => value
-                    .as_str()
-                    .chars()
-                    .next()
-                    .and_then(|c| crate::editor::Tool::from_key(c.to_ascii_lowercase()))
-                    .map(|tool| Msg::Tool(Some(tool))),
+                Key::Character(ref value) => {
+                    let c = value.as_str().chars().next()?.to_ascii_lowercase();
+                    if c == 'i' {
+                        return Some(Msg::Eyedropper);
+                    }
+                    crate::editor::Tool::from_key(c).map(|tool| Msg::Tool(Some(tool)))
+                }
                 _ => None,
             }
         },
@@ -555,11 +563,22 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
 ///
 /// Shared by both ways in: the overlay's capture button, and the requests that never put an
 /// overlay up at all.
+/// Where a shot is going.
+pub enum Destination {
+    /// Wherever the settings say, under the name the settings give.
+    Configured,
+    /// A temporary file, for a caller that asked the portal for an image.
+    Temp,
+    /// A file the person picked.
+    Path(PathBuf),
+}
+
 fn save(
     outputs: &[OutputState],
     args: Args,
     filename: &str,
     objects: &[crate::editor::Object],
+    dest: Destination,
 ) -> Vec<cosmic::Task<cosmic::Action<Message>>> {
     let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = Vec::new();
     let outputs = outputs.to_vec();
@@ -573,10 +592,10 @@ fn save(
     } = args;
 
     let mut success = true;
-    let image_path = if to_temp {
-        Capturer::temp_path()
-    } else {
-        Capturer::get_img_path(location, filename)
+    let image_path = match dest {
+        Destination::Path(path) => Some(path),
+        Destination::Temp => Capturer::temp_path(),
+        Destination::Configured => Capturer::get_img_path(location, filename),
     };
 
     match choice {
@@ -714,6 +733,64 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             app.editor.color = color;
             cosmic::Task::none()
         }
+        Msg::ChooseFolder => {
+            // The overlay comes down first. It holds the keyboard exclusively, so a file
+            // dialog opened underneath it could be looked at and not typed into.
+            let mut cmds: Vec<cosmic::Task<cosmic::Action<Message>>> = app
+                .outputs
+                .iter()
+                .map(|o| destroy_layer_surface(o.id))
+                .collect();
+
+            app.editor.finish_text();
+            app.pending_save = app.screenshot_args.take();
+
+            let name = jiff::Zoned::now()
+                .strftime(&app.config.screenshot.filename)
+                .to_string();
+            cmds.push(cosmic::Task::perform(
+                async move {
+                    cosmic::dialog::file_chooser::save::file(
+                        cosmic::dialog::file_chooser::save::Dialog::new()
+                            .title(fl!("save-to"))
+                            .file_name(name),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|response| response.url().and_then(|url| url.to_file_path().ok()))
+                },
+                |path| cosmic::action::app(Message::Screenshot(Msg::SaveTo(path))),
+            ));
+
+            cosmic::Task::batch(cmds)
+        }
+        Msg::SaveTo(path) => {
+            let Some(args) = app.pending_save.take() else {
+                tracing::error!("nothing was waiting to be saved");
+                return cosmic::Task::none();
+            };
+            let Some(path) = path else {
+                tracing::info!("the save was called off");
+                crate::dbus::answer(&args.reply, Err("cancelled".into()));
+                app.editor = crate::editor::Editor::default();
+                return cosmic::Task::none();
+            };
+
+            let objects: Vec<_> = app.editor.objects().cloned().collect();
+            let cmds = save(
+                &app.outputs,
+                args,
+                &app.config.screenshot.filename,
+                &objects,
+                Destination::Path(path),
+            );
+            app.editor = crate::editor::Editor::default();
+            cosmic::Task::batch(cmds)
+        }
+        Msg::Eyedropper => {
+            app.editor.eyedropper = !app.editor.eyedropper;
+            cosmic::Task::none()
+        }
         Msg::Undo => {
             app.editor.undo();
             refresh_preview(app);
@@ -748,11 +825,17 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             };
             app.editor.finish_text();
             let objects: Vec<_> = app.editor.objects().cloned().collect();
+            let dest = if args.to_temp {
+                Destination::Temp
+            } else {
+                Destination::Configured
+            };
             cmds.extend(save(
                 &app.outputs,
                 args,
                 &app.config.screenshot.filename,
                 &objects,
+                dest,
             ));
             app.editor = crate::editor::Editor::default();
             cosmic::Task::batch(cmds)
@@ -847,7 +930,8 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
                     loc if loc == ImageSaveLocation::Documents as usize => {
                         ImageSaveLocation::Documents
                     }
-                    _ => args.location,
+                    // One past the three places: the entry that asks.
+                    _ => return cosmic::task::message(Message::Screenshot(Msg::ChooseFolder)),
                 };
                 args.location = loc;
                 cosmic::task::message(Message::ConfigSet(config::Screenshot {
@@ -911,6 +995,7 @@ pub fn update_args(app: &mut App, args: Args) -> cosmic::Task<cosmic::Action<Mes
         fl!("save-to", "clipboard"),
         fl!("save-to", "pictures"),
         fl!("save-to", "documents"),
+        fl!("choose-folder"),
     ];
 
     if app.screenshot_args.replace(args).is_none() {
@@ -1055,11 +1140,17 @@ pub async fn capture(
 /// says what to take.
 pub fn shoot(app: &App, args: Args) -> cosmic::Task<cosmic::Action<Message>> {
     // Nothing was drawn: this path never put an overlay up for anyone to draw on.
+    let dest = if args.to_temp {
+        Destination::Temp
+    } else {
+        Destination::Configured
+    };
     cosmic::Task::batch(save(
         &app.outputs,
         args,
         &app.config.screenshot.filename,
         &[],
+        dest,
     ))
 }
 
@@ -1197,6 +1288,20 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
     for color in crate::editor::palette(accent) {
         bar = bar.push(swatch(color));
     }
+
+    bar = bar
+        .push(divider::vertical::light().height(Length::Fixed(28.0)))
+        .push(
+            button::custom(
+                icon::Icon::from(icon::from_name("tool-measure-symbolic").size(48))
+                    .width(Length::Fixed(24.0))
+                    .height(Length::Fixed(24.0)),
+            )
+            .selected(app.editor.eyedropper)
+            .class(cosmic::theme::Button::Icon)
+            .padding(spacing.space_xxs)
+            .on_press(Msg::Eyedropper),
+        );
 
     bar.push(divider::vertical::light().height(Length::Fixed(28.0)))
         // The wheel changes it; the number says what it changed to.

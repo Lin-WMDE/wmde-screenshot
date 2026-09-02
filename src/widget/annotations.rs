@@ -19,6 +19,8 @@ pub enum Draw {
 
 pub struct Annotations<'a> {
     pub editor: &'a Editor,
+    /// The frame under this surface, for the eyedropper to read a colour out of.
+    pub frame: Option<&'a image::RgbaImage>,
     /// Where this output sits in the desktop. Objects are kept in desktop coordinates, so
     /// a mark drawn on the second monitor stays on the second monitor - each output has
     /// its own surface and its own canvas, and they all share one editor.
@@ -35,6 +37,17 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Draw>> {
+        // The eyedropper follows the pointer, and nothing else would ask for the redraw
+        // that moving it needs.
+        if self.editor.eyedropper
+            && matches!(
+                event,
+                cosmic::iced::Event::Mouse(mouse::Event::CursorMoved { .. })
+            )
+        {
+            return Some(canvas::Action::request_redraw());
+        }
+
         // With no tool in hand the layer is transparent to the pointer: the press belongs
         // to the selection underneath, which is what moves and resizes it.
         self.editor.tool?;
@@ -69,11 +82,11 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
         &self,
         _state: &Self::State,
         renderer: &cosmic::Renderer,
-        _theme: &cosmic::Theme,
+        theme: &cosmic::Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry<cosmic::Renderer>> {
-        if self.editor.is_empty() {
+        if self.editor.is_empty() && !self.editor.eyedropper {
             return Vec::new();
         }
 
@@ -185,6 +198,12 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
             frame.stroke(&path, pen(1.0, cosmic::iced::Color::WHITE));
         }
 
+        if self.editor.eyedropper
+            && let Some(at) = cursor.position_in(bounds)
+        {
+            self.eyedropper(&mut frame, at, bounds, theme);
+        }
+
         vec![frame.into_geometry()]
     }
 
@@ -198,6 +217,86 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
             Some(_) => mouse::Interaction::Crosshair,
             None => mouse::Interaction::default(),
         }
+    }
+}
+
+impl Annotations<'_> {
+    /// The readout that follows the pointer: where it is on the desktop, and the colour
+    /// the shot has there. Drawn beside the pointer rather than in the toolbar, because a
+    /// number about the pointer is useless where the pointer is not.
+    fn eyedropper(
+        &self,
+        frame: &mut canvas::Frame,
+        at: Point,
+        bounds: Rectangle,
+        theme: &cosmic::Theme,
+    ) {
+        let desktop = at + self.origin;
+        let color = self.sample(at, bounds);
+
+        let label = match color {
+            Some([r, g, b]) => format!(
+                "{}, {}  #{r:02X}{g:02X}{b:02X}",
+                desktop.x as i32, desktop.y as i32
+            ),
+            None => format!("{}, {}", desktop.x as i32, desktop.y as i32),
+        };
+
+        // Above and to the right of the pointer, and flipped back inside near an edge.
+        let size = Size::new(label.chars().count() as f32 * 7.5 + 34.0, 26.0);
+        let mut origin = Point::new(at.x + 18.0, at.y + 18.0);
+        if origin.x + size.width > bounds.width {
+            origin.x = at.x - 18.0 - size.width;
+        }
+        if origin.y + size.height > bounds.height {
+            origin.y = at.y - 18.0 - size.height;
+        }
+
+        let cosmic = theme.cosmic();
+        let box_path = Path::new(|builder| builder.rectangle(origin, size));
+        frame.fill(
+            &box_path,
+            cosmic::iced::Color::from(cosmic.background(false).component.base),
+        );
+        frame.stroke(
+            &box_path,
+            pen(
+                1.0,
+                cosmic::iced::Color::from(cosmic.background(false).component.divider),
+            ),
+        );
+
+        if let Some([r, g, b]) = color {
+            let swatch = Path::new(|builder| {
+                builder.rectangle(
+                    Point::new(origin.x + 6.0, origin.y + 6.0),
+                    Size::new(14.0, 14.0),
+                );
+            });
+            frame.fill(&swatch, cosmic::iced::Color::from_rgb8(r, g, b));
+        }
+
+        frame.fill_text(canvas::Text {
+            content: label,
+            position: Point::new(origin.x + 26.0, origin.y + 5.0),
+            color: cosmic::iced::Color::from(cosmic.background(false).component.on),
+            size: 14.0.into(),
+            ..canvas::Text::default()
+        });
+    }
+
+    /// The colour of the shot under a point on this surface. `None` when there is no frame
+    /// to read, which is what a window or whole-monitor choice looks like here.
+    fn sample(&self, at: Point, bounds: Rectangle) -> Option<[u8; 3]> {
+        let frame = self.frame?;
+        // The surface is in logical units and the frame is in pixels.
+        let x = (at.x / bounds.width * frame.width() as f32) as u32;
+        let y = (at.y / bounds.height * frame.height() as f32) as u32;
+        if x >= frame.width() || y >= frame.height() {
+            return None;
+        }
+        let pixel = frame.get_pixel(x, y).0;
+        Some([pixel[0], pixel[1], pixel[2]])
     }
 }
 

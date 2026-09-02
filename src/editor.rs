@@ -263,6 +263,8 @@ pub struct Editor {
     editing: Option<usize>,
     /// What the next counter will say.
     next_number: u32,
+    /// Shows what is under the pointer: where it is, and what colour the shot has there.
+    pub eyedropper: bool,
     /// Index of the object the move tool has hold of.
     selected: Option<usize>,
     /// Where the pointer was when it last moved that object.
@@ -281,6 +283,7 @@ impl Default for Editor {
             drawing: None,
             editing: None,
             next_number: 1,
+            eyedropper: false,
             selected: None,
             grab: None,
         }
