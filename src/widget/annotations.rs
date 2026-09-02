@@ -81,7 +81,7 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
         // Desktop coordinates in, surface coordinates out.
         frame.translate(-self.origin);
 
-        for object in self.editor.objects() {
+        for object in self.editor.drawn().chain(self.editor.in_hand()) {
             match object {
                 Object::Path { points, stroke } => {
                     let Some((first, rest)) = points.split_first() else {
@@ -118,6 +118,22 @@ impl canvas::Program<Draw, cosmic::Theme, cosmic::Renderer> for Annotations<'_> 
                     let size = Size::new((to.x - from.x).abs(), (to.y - from.y).abs());
                     let path = Path::new(|builder| builder.rectangle(top_left, size));
                     frame.stroke(&path, pen(stroke.width, stroke.color));
+                }
+                // Being dragged out: the effect lands on release, so until then the
+                // rectangle is only outlined. A placed one is part of the picture and
+                // never reaches this loop.
+                Object::Blur { from, to, .. } | Object::Pixelate { from, to, .. } => {
+                    let top_left = Point::new(from.x.min(to.x), from.y.min(to.y));
+                    let size = Size::new((to.x - from.x).abs(), (to.y - from.y).abs());
+                    let path = Path::new(|builder| builder.rectangle(top_left, size));
+                    frame.fill(
+                        &path,
+                        cosmic::iced::Color {
+                            a: 0.25,
+                            ..cosmic::iced::Color::BLACK
+                        },
+                    );
+                    frame.stroke(&path, pen(1.0, cosmic::iced::Color::WHITE));
                 }
             }
         }

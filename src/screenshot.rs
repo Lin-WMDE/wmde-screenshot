@@ -411,8 +411,13 @@ pub enum Action {
 
 #[derive(Clone, Debug)]
 pub struct Args {
-    /// One frame per output, keyed by output name.
+    /// One frame per output, keyed by output name. Pristine: what the screen looked like
+    /// at the key press, and what the file is built from.
     pub output_images: HashMap<String, ScreenshotImage>,
+    /// The frames the overlay shows, when they differ from the pristine ones - which is
+    /// exactly when something has been blurred or pixelated. `None` the rest of the time,
+    /// so a shot without those tools carries one copy of the screen and not two.
+    pub preview: Option<HashMap<String, ScreenshotImage>>,
     /// Frames of the windows on each output, in stacking order.
     pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
     pub choice: Choice,
@@ -443,7 +448,8 @@ pub(crate) fn view(app: &App, id: window::Id) -> cosmic::Element<'_, Msg> {
         return space::horizontal().width(Length::Fixed(1.0)).into();
     };
 
-    let Some(img) = args.output_images.get(&output.name) else {
+    let frames = args.preview.as_ref().unwrap_or(&args.output_images);
+    let Some(img) = frames.get(&output.name) else {
         return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let theme = app.core.system_theme().cosmic();
@@ -675,7 +681,10 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
             match draw {
                 Draw::Press(at) => app.editor.press(at),
                 Draw::Drag(at) => app.editor.drag(at),
-                Draw::Release => app.editor.release(),
+                Draw::Release => {
+                    app.editor.release();
+                    refresh_preview(app);
+                }
                 Draw::Width(steps) => app.editor.nudge_width(steps),
             }
             cosmic::Task::none()
@@ -690,10 +699,12 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
         }
         Msg::Undo => {
             app.editor.undo();
+            refresh_preview(app);
             cosmic::Task::none()
         }
         Msg::Redo => {
             app.editor.redo();
+            refresh_preview(app);
             cosmic::Task::none()
         }
         Msg::Capture => {
@@ -1000,6 +1011,7 @@ pub async fn capture(
 
     Some(Args {
         output_images,
+        preview: None,
         toplevel_images,
         choice,
         location: config.save_location,
@@ -1141,6 +1153,8 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
         (Tool::Arrow, "draw-arrow"),
         (Tool::Rectangle, "draw-rectangle-symbolic"),
         (Tool::Marker, "marker-symbolic"),
+        (Tool::Blur, "image-filter-symbolic"),
+        (Tool::Pixelate, "view-grid-symbolic"),
     ] {
         bar = bar.push(tool_button(tool, name));
     }
@@ -1158,4 +1172,49 @@ fn editor_bar(app: &App) -> cosmic::Element<'_, Msg> {
         .push(arrow("edit-undo-symbolic", Msg::Undo))
         .push(arrow("edit-redo-symbolic", Msg::Redo))
         .into()
+}
+
+/// Rebuild the frames the overlay shows, when blur or pixelation has changed them.
+///
+/// Always from the pristine frames, never from the last preview: undo has to be able to
+/// take a blur back, and a blur applied to an already blurred frame cannot be undone by
+/// applying less of it.
+fn refresh_preview(app: &mut App) {
+    let Some(args) = app.screenshot_args.as_mut() else {
+        return;
+    };
+
+    if !app.editor.has_raster() {
+        // Nothing changes the picture any more, so the second copy of the screen goes.
+        args.preview = None;
+        return;
+    }
+
+    let objects: Vec<_> = app.editor.objects().cloned().collect();
+    let mut preview = HashMap::with_capacity(args.output_images.len());
+
+    for output in &app.outputs {
+        let Some(pristine) = args.output_images.get(&output.name) else {
+            continue;
+        };
+        let mut rgba = pristine.rgba.clone();
+        crate::editor::apply_raster(
+            &mut rgba,
+            &objects,
+            Rect {
+                left: output.logical_pos.0,
+                top: output.logical_pos.1,
+                right: output.logical_pos.0 + output.logical_size.0 as i32,
+                bottom: output.logical_pos.1 + output.logical_size.1 as i32,
+            },
+        );
+        let handle = cosmic::widget::image::Handle::from_rgba(
+            rgba.width(),
+            rgba.height(),
+            rgba.clone().into_vec(),
+        );
+        preview.insert(output.name.clone(), ScreenshotImage { rgba, handle });
+    }
+
+    args.preview = Some(preview);
 }

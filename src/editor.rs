@@ -17,6 +17,10 @@ pub enum Tool {
     Arrow,
     Rectangle,
     Marker,
+    /// Softens a rectangle of the shot beyond reading.
+    Blur,
+    /// Replaces a rectangle with coarse squares.
+    Pixelate,
 }
 
 impl Tool {
@@ -30,6 +34,8 @@ impl Tool {
             Self::Arrow => 'a',
             Self::Rectangle => 'r',
             Self::Marker => 'm',
+            Self::Blur => 'b',
+            Self::Pixelate => 'x',
         }
     }
 
@@ -40,6 +46,8 @@ impl Tool {
             Self::Arrow,
             Self::Rectangle,
             Self::Marker,
+            Self::Blur,
+            Self::Pixelate,
         ]
         .into_iter()
         .find(|tool| tool.key() == key)
@@ -84,6 +92,23 @@ pub enum Object {
         to: Point,
         stroke: Stroke,
     },
+    /// Softened past reading. The strength is the width the tool was set to, which is the
+    /// only number the person is already adjusting.
+    Blur {
+        from: Point,
+        to: Point,
+        strength: f32,
+    },
+    /// Coarse squares. Same: the width sets how coarse.
+    Pixelate { from: Point, to: Point, size: f32 },
+}
+
+impl Object {
+    /// Whether this one changes the picture itself rather than drawing over it. Those are
+    /// applied to the frame, so they must not also be drawn on the layer above it.
+    pub const fn is_raster(&self) -> bool {
+        matches!(self, Self::Blur { .. } | Self::Pixelate { .. })
+    }
 }
 
 /// The drawing half of the overlay.
@@ -120,6 +145,18 @@ impl Editor {
         self.objects.iter().chain(self.drawing.iter())
     }
 
+    /// What the layer above the picture has to draw: everything placed that is not already
+    /// part of the picture.
+    pub fn drawn(&self) -> impl Iterator<Item = &Object> {
+        self.objects.iter().filter(|object| !object.is_raster())
+    }
+
+    /// The object under the pointer right now. Drawn last and, for the raster tools, drawn
+    /// as an outline - the effect itself only lands when the pointer is let go.
+    pub const fn in_hand(&self) -> Option<&Object> {
+        self.drawing.as_ref()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty() && self.drawing.is_none()
     }
@@ -150,6 +187,16 @@ impl Editor {
                 to: at,
                 stroke,
             },
+            Tool::Blur => Object::Blur {
+                from: at,
+                to: at,
+                strength: self.width,
+            },
+            Tool::Pixelate => Object::Pixelate {
+                from: at,
+                to: at,
+                size: self.width,
+            },
         });
     }
 
@@ -163,7 +210,11 @@ impl Editor {
                 }
             }
             Some(
-                Object::Line { to, .. } | Object::Arrow { to, .. } | Object::Rectangle { to, .. },
+                Object::Line { to, .. }
+                | Object::Arrow { to, .. }
+                | Object::Rectangle { to, .. }
+                | Object::Blur { to, .. }
+                | Object::Pixelate { to, .. },
             ) => *to = at,
             None => {}
         }
@@ -180,7 +231,9 @@ impl Editor {
             Object::Path { points, .. } => points.len() > 1,
             Object::Line { from, to, .. }
             | Object::Arrow { from, to, .. }
-            | Object::Rectangle { from, to, .. } => from.distance(*to) > 2.0,
+            | Object::Rectangle { from, to, .. }
+            | Object::Blur { from, to, .. }
+            | Object::Pixelate { from, to, .. } => from.distance(*to) > 2.0,
         };
 
         if worth_keeping {
@@ -202,6 +255,12 @@ impl Editor {
     pub fn nudge_width(&mut self, steps: f32) {
         let step = if self.width >= 10.0 { 2.0 } else { 1.0 };
         self.set_width(self.width + steps * step);
+    }
+
+    /// Whether anything placed changes the picture itself. When it does, the frame shown
+    /// on screen has to be rebuilt from the pristine one every time the list changes.
+    pub fn has_raster(&self) -> bool {
+        self.objects.iter().any(Object::is_raster)
     }
 
     pub fn undo(&mut self) {
@@ -279,7 +338,12 @@ pub fn bake(image: &mut image::RgbaImage, objects: &[Object], bounds: crate::scr
         )
     };
 
+    apply_raster(image, objects, bounds);
+
     for object in objects {
+        if object.is_raster() {
+            continue;
+        }
         let mut builder = PathBuilder::new();
         let stroke = match object {
             Object::Path { points, stroke } => {
@@ -325,6 +389,8 @@ pub fn bake(image: &mut image::RgbaImage, objects: &[Object], bounds: crate::scr
                 builder.close();
                 *stroke
             }
+            // Already in the picture.
+            Object::Blur { .. } | Object::Pixelate { .. } => continue,
         };
 
         let Some(path) = builder.finish() else {
@@ -437,6 +503,79 @@ mod tests {
         );
     }
 
+    /// A 200x200 chequerboard: nothing about it is uniform, so any smoothing shows.
+    fn noisy_image() -> image::RgbaImage {
+        image::RgbaImage::from_fn(200, 200, |x, y| {
+            if (x / 4 + y / 4) % 2 == 0 {
+                image::Rgba([0, 0, 0, 255])
+            } else {
+                image::Rgba([255, 255, 255, 255])
+            }
+        })
+    }
+
+    fn whole(size: i32) -> crate::screenshot::Rect {
+        crate::screenshot::Rect {
+            left: 0,
+            top: 0,
+            right: size,
+            bottom: size,
+        }
+    }
+
+    #[test]
+    fn pixelation_flattens_its_rectangle_and_nothing_else() {
+        let mut image = noisy_image();
+        apply_raster(
+            &mut image,
+            &[Object::Pixelate {
+                from: Point::new(50.0, 50.0),
+                to: Point::new(150.0, 150.0),
+                size: 8.0,
+            }],
+            whole(200),
+        );
+
+        // Inside a single square every pixel is now the same.
+        let inside = image.get_pixel(60, 60);
+        assert_eq!(image.get_pixel(61, 61), inside);
+        assert_eq!(image.get_pixel(62, 60), inside);
+
+        // The chequerboard outside is untouched.
+        assert_ne!(
+            image.get_pixel(10, 10),
+            image.get_pixel(14, 10),
+            "pixelation reached outside its rectangle"
+        );
+    }
+
+    #[test]
+    fn blur_softens_its_rectangle_and_nothing_else() {
+        let mut image = noisy_image();
+        let before_outside = *image.get_pixel(10, 10);
+        apply_raster(
+            &mut image,
+            &[Object::Blur {
+                from: Point::new(50.0, 50.0),
+                to: Point::new(150.0, 150.0),
+                strength: 6.0,
+            }],
+            whole(200),
+        );
+
+        // Black and white have met somewhere in the middle.
+        let inside = image.get_pixel(100, 100).0[0];
+        assert!(
+            (20..=235).contains(&inside),
+            "nothing was blurred: the pixel is still {inside}"
+        );
+        assert_eq!(
+            *image.get_pixel(10, 10),
+            before_outside,
+            "the blur reached outside its rectangle"
+        );
+    }
+
     #[test]
     fn baking_puts_the_mark_where_the_preview_had_it() {
         // A 100x100 image over a 100x100 piece of desktop at (0, 0): one logical unit is
@@ -471,5 +610,127 @@ mod tests {
             [0, 0, 0, 255],
             "nothing may be drawn away from the line"
         );
+    }
+}
+
+/// Apply the tools that change the picture itself, in the order they were placed.
+///
+/// Shared by the frame shown on screen and the file that is written, so that what a person
+/// sees blurred is what comes out blurred.
+pub fn apply_raster(
+    image: &mut image::RgbaImage,
+    objects: &[Object],
+    bounds: crate::screenshot::Rect,
+) {
+    let (width, height) = (image.width() as i64, image.height() as i64);
+    let sx = image.width() as f32 / (bounds.right - bounds.left).max(1) as f32;
+    let sy = image.height() as f32 / (bounds.bottom - bounds.top).max(1) as f32;
+
+    for object in objects {
+        let (from, to, strength, pixelate) = match object {
+            Object::Blur { from, to, strength } => (from, to, *strength, false),
+            Object::Pixelate { from, to, size } => (from, to, *size, true),
+            _ => continue,
+        };
+
+        // Desktop coordinates to image pixels, clamped to the image: a selection can be
+        // dragged past the edge of the monitor it started on.
+        let x0 = (((from.x.min(to.x) - bounds.left as f32) * sx) as i64).clamp(0, width);
+        let x1 = (((from.x.max(to.x) - bounds.left as f32) * sx) as i64).clamp(0, width);
+        let y0 = (((from.y.min(to.y) - bounds.top as f32) * sy) as i64).clamp(0, height);
+        let y1 = (((from.y.max(to.y) - bounds.top as f32) * sy) as i64).clamp(0, height);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+
+        if pixelate {
+            // Square side in image pixels. Never below two: one is the picture itself.
+            let side = ((strength * 2.0 * sx) as i64).max(2);
+            for by in (y0..y1).step_by(side as usize) {
+                for bx in (x0..x1).step_by(side as usize) {
+                    let (ex, ey) = ((bx + side).min(x1), (by + side).min(y1));
+                    let mut sum = [0u64; 4];
+                    let mut count = 0u64;
+                    for y in by..ey {
+                        for x in bx..ex {
+                            let p = image.get_pixel(x as u32, y as u32).0;
+                            for i in 0..4 {
+                                sum[i] += p[i] as u64;
+                            }
+                            count += 1;
+                        }
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    let mean = [
+                        (sum[0] / count) as u8,
+                        (sum[1] / count) as u8,
+                        (sum[2] / count) as u8,
+                        (sum[3] / count) as u8,
+                    ];
+                    for y in by..ey {
+                        for x in bx..ex {
+                            image.put_pixel(x as u32, y as u32, image::Rgba(mean));
+                        }
+                    }
+                }
+            }
+        } else {
+            // A box blur run twice: cheap, and two passes are close enough to a gaussian
+            // that nothing readable survives.
+            let radius = ((strength * sx) as i64).max(1);
+            for _ in 0..2 {
+                blur_box(image, x0, y0, x1, y1, radius, true);
+                blur_box(image, x0, y0, x1, y1, radius, false);
+            }
+        }
+    }
+}
+
+/// One separable pass of a box blur over a region. Reads the region into a buffer first,
+/// because averaging in place would smear each pixel into the next.
+fn blur_box(
+    image: &mut image::RgbaImage,
+    x0: i64,
+    y0: i64,
+    x1: i64,
+    y1: i64,
+    radius: i64,
+    horizontal: bool,
+) {
+    let source: Vec<[u8; 4]> = (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .map(|(x, y)| image.get_pixel(x as u32, y as u32).0)
+        .collect();
+    let w = (x1 - x0) as usize;
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let mut sum = [0u64; 4];
+            let mut count = 0u64;
+            for step in -radius..=radius {
+                let (sx, sy) = if horizontal {
+                    (x + step, y)
+                } else {
+                    (x, y + step)
+                };
+                if sx < x0 || sx >= x1 || sy < y0 || sy >= y1 {
+                    continue;
+                }
+                let p = source[(sy - y0) as usize * w + (sx - x0) as usize];
+                for i in 0..4 {
+                    sum[i] += p[i] as u64;
+                }
+                count += 1;
+            }
+            let mean = image::Rgba([
+                (sum[0] / count) as u8,
+                (sum[1] / count) as u8,
+                (sum[2] / count) as u8,
+                (sum[3] / count) as u8,
+            ]);
+            image.put_pixel(x as u32, y as u32, mean);
+        }
     }
 }
