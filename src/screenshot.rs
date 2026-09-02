@@ -211,6 +211,19 @@ impl Capturer {
         Ok(buffer)
     }
 
+    /// A file that outlives this process but belongs to nobody: what a portal caller is
+    /// handed. Kept rather than deleted on drop - the caller reads it after we answer.
+    pub fn temp_path() -> Option<PathBuf> {
+        tempfile::Builder::new()
+            .prefix("screenshot-")
+            .suffix(".png")
+            .tempfile()
+            .and_then(|file| file.keep().map_err(Into::into))
+            .inspect_err(|err| tracing::error!("no temporary file: {err}"))
+            .ok()
+            .map(|(_file, path)| path)
+    }
+
     pub fn get_img_path(location: ImageSaveLocation, filename: &str) -> Option<PathBuf> {
         let mut path = match location {
             ImageSaveLocation::Pictures => {
@@ -400,6 +413,12 @@ pub struct Args {
     /// Whether the overlay is put up at all. `full`, `screen` and `window` shoot straight
     /// from the key press; only `gui` asks.
     pub interactive: bool,
+    /// Where the answer goes when a caller is waiting for the file.
+    pub reply: crate::dbus::Reply,
+    /// Save to a temporary file rather than the configured place. An application that
+    /// asked the portal for a screenshot wants an image to read, not a copy in the
+    /// person's pictures folder.
+    pub to_temp: bool,
 }
 
 struct Output {
@@ -486,11 +505,17 @@ fn save(
         choice,
         output_images: mut images,
         location,
+        reply,
+        to_temp,
         ..
     } = args;
 
     let mut success = true;
-    let image_path = Capturer::get_img_path(location, filename);
+    let image_path = if to_temp {
+        Capturer::temp_path()
+    } else {
+        Capturer::get_img_path(location, filename)
+    };
 
     match choice {
         Choice::Output(name) => {
@@ -599,8 +624,11 @@ pub fn update_msg(app: &mut App, msg: Msg) -> cosmic::Task<cosmic::Action<Messag
         }
         Msg::Cancel => {
             let cmds = app.outputs.iter().map(|o| destroy_layer_surface(o.id));
-            if app.screenshot_args.take().is_none() {
-                tracing::error!("cancelled with no shot in progress");
+            match app.screenshot_args.take() {
+                // A caller waiting for a file is told the person said no, rather than
+                // being left holding a call that never returns.
+                Some(args) => crate::dbus::answer(&args.reply, Err("cancelled".into())),
+                None => tracing::error!("cancelled with no shot in progress"),
             }
 
             cosmic::Task::batch(cmds)
@@ -788,8 +816,12 @@ pub async fn capture(
     outputs: Vec<OutputState>,
     config: config::Screenshot,
     active: Option<WlOutput>,
-    request: Request,
+    incoming: crate::dbus::Incoming,
 ) -> Option<Args> {
+    let request = incoming.request;
+    // Asked before the value moves into `Args`: someone waiting for the file is what makes
+    // this a temporary one.
+    let to_temp = incoming.reply.lock().unwrap().is_some();
     let capturer = Capturer::new(wayland_helper);
     let outputs: Vec<Output> = outputs
         .iter()
@@ -869,6 +901,8 @@ pub async fn capture(
         choice,
         location: config.save_location,
         interactive: matches!(request, Request::Gui),
+        to_temp,
+        reply: incoming.reply,
     })
 }
 

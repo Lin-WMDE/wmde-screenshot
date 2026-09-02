@@ -72,13 +72,13 @@ pub struct Screenshot {
     /// Last rectangle, so a second shot of the same place starts where the first ended.
     pub prev_rectangle: Option<screenshot::Rect>,
     /// A request that arrived before the wayland side was up. See [`Screenshot::request`].
-    pending: Option<dbus::Request>,
+    pending: Option<dbus::Incoming>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Message {
     /// A request arrived on the bus.
-    Request(dbus::Request),
+    Request(dbus::Incoming),
     /// The overlay talking to itself.
     Screenshot(screenshot::Msg),
     /// An output appeared, moved, resized or went away.
@@ -131,7 +131,7 @@ impl cosmic::Application for Screenshot {
         match message {
             Message::Request(request) => self.request(request),
             Message::RunPending => match self.pending.take() {
-                Some(request) => self.request(request),
+                Some(incoming) => self.request(incoming),
                 None => cosmic::Task::none(),
             },
             Message::Captured(args) => {
@@ -197,9 +197,12 @@ impl Screenshot {
     /// Take the frames a request needs, then hand them to the overlay. Capture happens
     /// before anything is drawn: the shot has to show the desktop as it was at the key
     /// press, not the overlay that came up to ask about it.
-    fn request(&mut self, request: dbus::Request) -> cosmic::Task<cosmic::Action<Message>> {
+    fn request(&mut self, incoming: dbus::Incoming) -> cosmic::Task<cosmic::Action<Message>> {
+        let request = incoming.request;
+
         if self.screenshot_args.is_some() {
             tracing::info!("{request:?} ignored: the overlay is already up");
+            dbus::answer(&incoming.reply, Err("a screenshot is already in progress".into()));
             return cosmic::Task::none();
         }
 
@@ -209,7 +212,7 @@ impl Screenshot {
         // every session does nothing, and only the first.
         if self.wayland_helper.is_none() || self.outputs.is_empty() {
             tracing::info!("{request:?} held until the outputs arrive");
-            self.pending = Some(request);
+            self.pending = Some(incoming);
             return cosmic::Task::none();
         }
 
@@ -220,7 +223,7 @@ impl Screenshot {
         let active = self.active_output.clone();
 
         cosmic::Task::perform(
-            screenshot::capture(wayland_helper, outputs, config, active, request),
+            screenshot::capture(wayland_helper, outputs, config, active, incoming),
             |args| match args {
                 Some(args) => cosmic::action::app(Message::Captured(Box::new(args))),
                 None => cosmic::action::none(),
@@ -362,15 +365,15 @@ fn bus() -> impl futures::Stream<Item = Message> {
             }
         };
 
-        while let Some(request) = rx.recv().await {
-            if output.send(Message::Request(request)).await.is_err() {
+        while let Some(incoming) = rx.recv().await {
+            if output.send(Message::Request(incoming)).await.is_err() {
                 return;
             }
         }
     })
 }
 
-async fn serve(tx: tokio::sync::mpsc::Sender<dbus::Request>) -> zbus::Result<zbus::Connection> {
+async fn serve(tx: tokio::sync::mpsc::Sender<dbus::Incoming>) -> zbus::Result<zbus::Connection> {
     let connection = zbus::connection::Builder::session()?
         .serve_at(dbus::DBUS_PATH, dbus::Service::new(tx))?
         .build()
