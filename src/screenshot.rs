@@ -1268,7 +1268,7 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     let _ = has_region;
     for (name, chosen, message) in [
         (
-            "screenshot-selection-symbolic",
+            "wmde-shot-region-symbolic",
             matches!(current_choice(app), Some(Choice::Rectangle(..))),
             Msg::Choice(Choice::Rectangle(
                 app.prev_rectangle.unwrap_or_default(),
@@ -1276,12 +1276,12 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
             )),
         ),
         (
-            "screenshot-window-symbolic",
+            "wmde-shot-window-symbolic",
             matches!(current_choice(app), Some(Choice::Window(..))),
             Msg::Choice(Choice::Window(output.name.clone(), None)),
         ),
         (
-            "screenshot-screen-symbolic",
+            "wmde-shot-monitor-symbolic",
             matches!(current_choice(app), Some(Choice::Output(..))),
             Msg::Choice(Choice::Output(output.name.clone())),
         ),
@@ -1290,22 +1290,22 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     }
 
     for (tool, name) in [
-        (Tool::Pencil, "tool-pencil-symbolic"),
-        (Tool::Line, "draw-line"),
-        (Tool::Arrow, "draw-arrow"),
-        (Tool::Rectangle, "draw-rectangle-symbolic"),
-        (Tool::Marker, "marker-symbolic"),
-        (Tool::Text, "draw-text-symbolic"),
-        (Tool::Counter, "list-add-symbolic"),
-        (Tool::Blur, "image-filter-symbolic"),
-        (Tool::Pixelate, "view-grid-symbolic"),
-        (Tool::Move, "object-select-symbolic"),
+        (Tool::Pencil, "wmde-shot-pencil-symbolic"),
+        (Tool::Line, "wmde-shot-line-symbolic"),
+        (Tool::Arrow, "wmde-shot-arrow-symbolic"),
+        (Tool::Rectangle, "wmde-shot-rectangle-symbolic"),
+        (Tool::Marker, "wmde-shot-marker-symbolic"),
+        (Tool::Text, "wmde-shot-text-symbolic"),
+        (Tool::Counter, "wmde-shot-counter-symbolic"),
+        (Tool::Blur, "wmde-shot-blur-symbolic"),
+        (Tool::Pixelate, "wmde-shot-pixelate-symbolic"),
+        (Tool::Move, "wmde-shot-move-symbolic"),
     ] {
         bar = bar.push(tool_button(tool, name));
     }
 
     bar = bar.push(
-        round_button("tool-measure-symbolic", app.editor.eyedropper).on_press(Msg::Eyedropper),
+        round_button("wmde-shot-eyedropper-symbolic", app.editor.eyedropper).on_press(Msg::Eyedropper),
     );
 
     for color in crate::editor::palette(accent) {
@@ -1313,8 +1313,8 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     }
 
     bar = bar
-        .push(round_button("edit-undo-symbolic", false).on_press(Msg::Undo))
-        .push(round_button("edit-redo-symbolic", false).on_press(Msg::Redo));
+        .push(round_button("wmde-shot-undo-symbolic", false).on_press(Msg::Undo))
+        .push(round_button("wmde-shot-redo-symbolic", false).on_press(Msg::Redo));
 
     // Where it goes. Three buttons rather than a list to choose from: the reference has
     // copy and save as buttons, and a list is one more click for the two things anyone
@@ -1323,19 +1323,19 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
         !matches!(current_choice(app), Some(Choice::Rectangle(r, _)) if r.dimensions().is_none());
 
     bar.push(
-        round_button("edit-copy-symbolic", false).on_press_maybe(
+        round_button("wmde-shot-copy-symbolic", false).on_press_maybe(
             ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard)),
         ),
     )
     .push(
-        round_button("document-save-symbolic", false)
+        round_button("wmde-shot-save-symbolic", false)
             .on_press_maybe(ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures))),
     )
     .push(
-        round_button("document-save-as-symbolic", false)
+        round_button("wmde-shot-save-as-symbolic", false)
             .on_press_maybe(ready.then_some(Msg::ChooseFolder)),
     )
-    .push(round_button("window-close-symbolic", false).on_press(Msg::Cancel))
+    .push(round_button("wmde-shot-close-symbolic", false).on_press(Msg::Cancel))
     .into()
 }
 

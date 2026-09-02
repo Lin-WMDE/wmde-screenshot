@@ -486,7 +486,21 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         );
         let outer_top_left = Point::new(self.output_rect.left as f32, self.output_rect.top as f32);
         let outer_rect = Rectangle::new(outer_top_left, outer_size);
+        // A monitor the selection does not reach at all is dimmed whole. Returning here -
+        // which is what used to happen - left that monitor at full brightness, so a
+        // selection on one screen made the other look like it was not part of the shot.
         let Some(clipped_inner_rect) = inner_rect.intersection(&outer_rect) else {
+            let mut overlay = Color::BLACK;
+            overlay.a = 0.3;
+            renderer.fill_quad(
+                Quad {
+                    bounds: Rectangle::new(Point::ORIGIN, outer_size),
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    snap: true,
+                },
+                overlay,
+            );
             return;
         };
         // Everything outside the selection is dimmed. Four bands rather than one mesh:

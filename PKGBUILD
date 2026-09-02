@@ -50,5 +50,11 @@ package() {
   cd "$srcdir/$pkgname"
   # installs /usr/bin/wmde-screenshot and the D-Bus activation file
   just rootdir="$pkgdir" prefix=/usr install
+  # The toolbar's own icon set. One style, one source: the glyphs used to come from five
+  # different themes, half of them not symbolic and so unable to take the button's colour.
+  find data/icons -type f | while read -r f; do
+    install -Dm644 "$f" "$pkgdir/usr/share/icons/hicolor/${f#data/icons/}"
+  done
+
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
