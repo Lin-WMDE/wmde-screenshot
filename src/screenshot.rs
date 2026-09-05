@@ -1208,7 +1208,7 @@ fn announce(success: bool, path: Option<&Path>) {
 fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> {
     use crate::editor::Tool;
     use cosmic::iced::{Alignment, Background, Border};
-    use cosmic::widget::{button, container, row, space};
+    use cosmic::widget::{button, container, row, space, text, tooltip};
 
     let theme = app.core.system_theme().cosmic();
     let spacing = theme.spacing;
@@ -1243,6 +1243,14 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
         .on_press(Msg::Color(color))
     };
 
+    // Every button on this strip is a bare glyph: nothing on the overlay says what a
+    // tool does, so the label lives in the tooltip or nowhere. Top for all of them,
+    // because the strip is parked under the selection whenever it fits, which leaves the
+    // free space above it.
+    let tip = |control: cosmic::widget::Button<'static, Msg>, label: String| {
+        tooltip(control, text::body(label), tooltip::Position::Top)
+    };
+
     let mut bar = row::with_capacity(32)
         .align_y(Alignment::Center)
         .spacing(spacing.space_xxs);
@@ -1250,7 +1258,7 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     // What to take, before what to draw on it.
     let has_region = matches!(app.editor.tool, None) && matches!(&app.screenshot_args, Some(_));
     let _ = has_region;
-    for (name, chosen, message) in [
+    for (name, chosen, message, label) in [
         (
             "wmde-shot-region-symbolic",
             matches!(current_choice(app), Some(Choice::Rectangle(..))),
@@ -1258,48 +1266,78 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
                 app.prev_rectangle.unwrap_or_default(),
                 DragState::None,
             )),
+            fl!("shot-region"),
         ),
         (
             "wmde-shot-window-symbolic",
             matches!(current_choice(app), Some(Choice::Window(..))),
             Msg::Choice(Choice::Window(output.name.clone(), None)),
+            fl!("shot-window"),
         ),
         (
             "wmde-shot-monitor-symbolic",
             matches!(current_choice(app), Some(Choice::Output(..))),
             Msg::Choice(Choice::Output(output.name.clone())),
+            fl!("shot-screen"),
         ),
     ] {
-        bar = bar.push(round_button(name, chosen).on_press(message));
+        bar = bar.push(tip(round_button(name, chosen).on_press(message), label));
     }
 
-    for (tool, name) in [
-        (Tool::Pencil, "wmde-shot-pencil-symbolic"),
-        (Tool::Line, "wmde-shot-line-symbolic"),
-        (Tool::Arrow, "wmde-shot-arrow-symbolic"),
-        (Tool::Rectangle, "wmde-shot-rectangle-symbolic"),
-        (Tool::Marker, "wmde-shot-marker-symbolic"),
-        (Tool::Text, "wmde-shot-text-symbolic"),
-        (Tool::Counter, "wmde-shot-counter-symbolic"),
-        (Tool::Blur, "wmde-shot-blur-symbolic"),
-        (Tool::Pixelate, "wmde-shot-pixelate-symbolic"),
-        (Tool::Move, "wmde-shot-move-symbolic"),
+    for (tool, name, label) in [
+        (
+            Tool::Pencil,
+            "wmde-shot-pencil-symbolic",
+            fl!("tool-pencil"),
+        ),
+        (Tool::Line, "wmde-shot-line-symbolic", fl!("tool-line")),
+        (Tool::Arrow, "wmde-shot-arrow-symbolic", fl!("tool-arrow")),
+        (
+            Tool::Rectangle,
+            "wmde-shot-rectangle-symbolic",
+            fl!("tool-rectangle"),
+        ),
+        (
+            Tool::Marker,
+            "wmde-shot-marker-symbolic",
+            fl!("tool-marker"),
+        ),
+        (Tool::Text, "wmde-shot-text-symbolic", fl!("tool-text")),
+        (
+            Tool::Counter,
+            "wmde-shot-counter-symbolic",
+            fl!("tool-counter"),
+        ),
+        (Tool::Blur, "wmde-shot-blur-symbolic", fl!("tool-blur")),
+        (
+            Tool::Pixelate,
+            "wmde-shot-pixelate-symbolic",
+            fl!("tool-pixelate"),
+        ),
+        (Tool::Move, "wmde-shot-move-symbolic", fl!("tool-move")),
     ] {
-        bar = bar.push(tool_button(tool, name));
+        bar = bar.push(tip(tool_button(tool, name), label));
     }
 
-    bar = bar.push(
+    bar = bar.push(tip(
         round_button("wmde-shot-eyedropper-symbolic", app.editor.eyedropper)
             .on_press(Msg::Eyedropper),
-    );
+        fl!("tool-eyedropper"),
+    ));
 
     for color in crate::editor::palette(accent) {
         bar = bar.push(swatch(color));
     }
 
     bar = bar
-        .push(round_button("wmde-shot-undo-symbolic", false).on_press(Msg::Undo))
-        .push(round_button("wmde-shot-redo-symbolic", false).on_press(Msg::Redo));
+        .push(tip(
+            round_button("wmde-shot-undo-symbolic", false).on_press(Msg::Undo),
+            fl!("undo"),
+        ))
+        .push(tip(
+            round_button("wmde-shot-redo-symbolic", false).on_press(Msg::Redo),
+            fl!("redo"),
+        ));
 
     // Where it goes. Three buttons rather than a list to choose from: the reference has
     // copy and save as buttons, and a list is one more click for the two things anyone
@@ -1307,20 +1345,28 @@ fn editor_bar(app: &App, output: &OutputState) -> cosmic::Element<'static, Msg> 
     let ready =
         !matches!(current_choice(app), Some(Choice::Rectangle(r, _)) if r.dimensions().is_none());
 
-    bar.push(
+    // The tooltip sits on the wrapper, not on the button, so the three save buttons keep
+    // their labels while the selection has no size and they are switched off.
+    bar.push(tip(
         round_button("wmde-shot-copy-symbolic", false).on_press_maybe(
             ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard)),
         ),
-    )
-    .push(
+        fl!("save-to", "clipboard"),
+    ))
+    .push(tip(
         round_button("wmde-shot-save-symbolic", false)
             .on_press_maybe(ready.then_some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures))),
-    )
-    .push(
+        fl!("save-to", "pictures"),
+    ))
+    .push(tip(
         round_button("wmde-shot-save-as-symbolic", false)
             .on_press_maybe(ready.then_some(Msg::ChooseFolder)),
-    )
-    .push(round_button("wmde-shot-close-symbolic", false).on_press(Msg::Cancel))
+        fl!("save-as"),
+    ))
+    .push(tip(
+        round_button("wmde-shot-close-symbolic", false).on_press(Msg::Cancel),
+        fl!("cancel"),
+    ))
     .into()
 }
 
