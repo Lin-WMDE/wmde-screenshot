@@ -7122,7 +7122,7 @@ dependencies = [
 
 [[package]]
 name = "wmde-screenshot"
-version = "0.1.0"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "async-io",
