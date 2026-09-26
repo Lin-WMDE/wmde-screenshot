@@ -32,8 +32,8 @@ zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 
 # Capture. Same pinned revision as wmde-portal: the two talk to the same compositor
 # protocols, and a split between them would be a bug that only shows at run time.
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c0cff4d" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c0cff4d" }
 wayland-client = "0.31.14"
 wayland-protocols = "0.32.12"
 # Runtime-agnostic timer for the capture timeouts: the same code has to work under tokio
