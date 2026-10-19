@@ -31,3 +31,6 @@ saved = Screenshot saved
 failed = Screenshot failed
 
 choose-folder = Choose folder
+
+# The name notifications are sent under
+app-name = Screenshot

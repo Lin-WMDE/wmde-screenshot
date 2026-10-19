@@ -31,3 +31,6 @@ saved = Знімок збережено
 failed = Не вдалося зробити знімок
 
 choose-folder = Обрати теку
+
+# The name notifications are sent under
+app-name = Знімок екрана

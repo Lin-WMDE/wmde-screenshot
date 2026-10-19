@@ -1188,7 +1188,7 @@ fn announce(success: bool, path: Option<&Path>) {
     // is being torn down on this thread.
     tokio::task::spawn_blocking(move || {
         if let Err(err) = notify_rust::Notification::new()
-            .appname("WMDE")
+            .appname(&fl!("app-name"))
             .summary(&summary)
             .body(&body)
             .icon("applets-screenshooter")
