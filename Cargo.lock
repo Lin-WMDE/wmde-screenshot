@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-settings-config"
-version = "1.10.0"
+version = "1.11.0"
 dependencies = [
  "cosmic-config",
  "ron 0.11.0",
@@ -7191,7 +7191,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wmde-bg-config"
-version = "1.10.0"
+version = "1.11.0"
 dependencies = [
  "cosmic-config",
  "derive_setters",
